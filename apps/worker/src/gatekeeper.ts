@@ -22,8 +22,8 @@ export class Gatekeeper extends DurableObject<Env> {
     const g = (await this.ctx.storage.get<Bucket>("global")) ?? { fails: 0, until: 0 };
     b.fails++;
     g.fails++;
-    // exponential backoff per IP after 5 failures; global slowdown after 50 failures/hour
-    if (b.fails >= 5) b.until = now + Math.min(3600_000, 2 ** (b.fails - 5) * 30_000);
+    // exponential backoff per IP after 8 failures (30 s, 60 s, ... capped at 10 min); global slowdown after 50 failures/hour
+    if (b.fails >= 8) b.until = now + Math.min(600_000, 2 ** (b.fails - 8) * 30_000);
     if (g.fails >= 50) g.until = now + 60_000;
     await this.ctx.storage.put(`ip:${ip}`, b);
     await this.ctx.storage.put("global", g);

@@ -25,7 +25,7 @@
   "kv_namespaces": [{ "binding": "CONFIG", "id": "b855ea9a556d414c91c3470275b20b2f" }],
   "r2_buckets": [{ "binding": "ARCHIVE", "bucket_name": "predictit-archive" }],
   "triggers": { "crons": ["* * * * *"] },
-  // "limits": { "cpu_ms": 30000 },  // requires Workers Paid; the Free plan caps CPU at 10 ms per invocation (see docs/SETUP.md)
+  "limits": { "cpu_ms": 30000 }, // requires Workers Paid (enabled 2026-11-06); the Free plan caps CPU at 10 ms per invocation (see docs/SETUP.md)
   "vars": {
     "APP_NAME": "predictit",
     // Cloudflare Access (optional). When ACCESS_AUD is set, every request must carry a valid Cf-Access-Jwt-Assertion.

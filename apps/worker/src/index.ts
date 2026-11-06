@@ -40,12 +40,15 @@ async function handleAuth(req: Request, env: Env, url: URL): Promise<Response | 
     if (!env.GATE_PASSPHRASE || !env.SESSION_SECRET) return json({ error: "Fallback login is not configured." }, { status: 503 });
     const gate = env.GATE.get(env.GATE.idFromName("gate")) as unknown as Gatekeeper;
     const ip = clientIp(req);
-    const chk = await gate.check(ip);
-    if (!chk.allowed) return json({ error: `Too many attempts; retry in ${chk.retryAfterSec}s.` }, { status: 429, headers: { "retry-after": String(chk.retryAfterSec) } });
-    // Accept JSON (API clients) or a plain HTML form post (the no-script login shell).
-    let body: { passphrase?: string; email?: string } = {};
     const ctype = req.headers.get("content-type") ?? "";
     const isForm = ctype.includes("application/x-www-form-urlencoded") || ctype.includes("multipart/form-data");
+    const chk = await gate.check(ip);
+    if (!chk.allowed) {
+      if (isForm) return loginPage(env, `Too many attempts; retry in ${chk.retryAfterSec}s.`);
+      return json({ error: `Too many attempts; retry in ${chk.retryAfterSec}s.` }, { status: 429, headers: { "retry-after": String(chk.retryAfterSec) } });
+    }
+    // Accept JSON (API clients) or a plain HTML form post (the no-script login shell).
+    let body: { passphrase?: string; email?: string } = {};
     try {
       if (isForm) {
         const fd = await req.formData();
