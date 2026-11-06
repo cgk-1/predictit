@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import type { RankedContract } from "@predictit/engine";
-import { StaticServerProvider } from "../api/context";
+import { StaticServerProvider, projectState } from "../api/context";
 import type { ServerConnection } from "../api/useServerState";
 import { gradesFixture, syntheticFixture } from "../test/fixture";
 import { TodayView } from "./Today";
@@ -18,6 +18,8 @@ import { ReplayView } from "./Replay";
 import { PerformanceView } from "./Performance";
 import { Budgets, SettingsView } from "./Settings";
 import { LeanView } from "./Lean";
+import { DashView } from "./Dash";
+import { fmtNum } from "../lib/format";
 import { PriceChart } from "../components/PriceChart";
 import { GexChart } from "../components/GexChart";
 import { GexProfile } from "../components/GexProfile";
@@ -364,5 +366,39 @@ describe("settings", () => {
     const html = renderToString(<Budgets s={mid.settings} save={async () => {}} />).replace(/<!-- -->/g, "");
     expect(html).toContain("Max premium per contract, USD — applies to SPX and SPY ranking and to the closing window");
     expect(html).toContain("Current value on the server: $200");
+  });
+});
+
+describe("Dash", () => {
+  const withActions = (f: ReturnType<typeof syntheticFixture>, spx: "BUY CALL" | "BUY PUT" | "WAIT", spy: "BUY CALL" | "BUY PUT" | "WAIT") => {
+    const st = f.state;
+    const inst = st.instruments!;
+    const patch = (pack: typeof inst.SPX, action: typeof spx) => ({ ...pack, decision: { ...pack.decision!, summary: { ...pack.decision!.summary, action } } });
+    return { ...st, instruments: { SPX: patch(inst.SPX, spx), SPY: patch(inst.SPY, spy) }, decision: patch(inst.SPX, spx).decision };
+  };
+  const renderDash = (state: ReturnType<typeof withActions>, inst: "SPX" | "SPY", now: number) =>
+    renderToString(
+      <StaticServerProvider conn={conn(projectState(state, inst))} now={now}>
+        <DashView />
+      </StaticServerProvider>,
+    ).replace(/<!-- -->/g, "");
+
+  it("shows the raw SPX and SPY quotes in the market tile whichever instrument is selected", () => {
+    const f = syntheticFixture("2026-11-06", 11, 5);
+    const html = renderDash(withActions(f, "WAIT", "WAIT"), "SPY", f.asOf);
+    expect(html).toContain("Action · SPY");
+    expect(html).toContain(`<b>SPX</b> <span class="mono">${fmtNum(f.state.spx!.last, 2)}</span>`);
+    expect(html).toContain(`<b>SPY</b> <span class="mono">${fmtNum(f.state.spy!.last)}</span>`);
+  });
+
+  it("flags when the other instrument's own setup disagrees, and says so when it agrees", () => {
+    const f = syntheticFixture("2026-11-06", 11, 5);
+    const dis = renderDash(withActions(f, "BUY CALL", "BUY PUT"), "SPY", f.asOf);
+    expect(dis).toContain("SPX BUY CALL — disagrees");
+    const agree = renderDash(withActions(f, "BUY PUT", "BUY PUT"), "SPX", f.asOf);
+    expect(agree).toContain("SPY BUY PUT — agrees");
+    const none = renderDash(withActions(f, "BUY PUT", "WAIT"), "SPX", f.asOf);
+    expect(none).not.toContain("disagrees");
+    expect(none).toContain("SPY WAIT");
   });
 });

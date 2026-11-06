@@ -1608,3 +1608,8 @@ code {
 .dash-list { margin: 0; padding-left: 1.1em; font-size: var(--fs-sm); color: var(--text-2); }
 .dash-list li { margin: 2px 0; }
 @media (max-width: 900px) { .dash-row-plan { grid-template-columns: 1fr; } }
+
+.dash-warn {
+  color: var(--danger);
+  font-weight: 600;
+}

@@ -291,7 +291,7 @@ export function gexSummary(chain: ChainSnapshot, asOf: number, cfg: GexConfig = 
     return { model: m, net: n, net0dte: n0, flip: zeroCrossNearest(prof, S) };
   });
   const notes: DataQualityNote[] = [
-    { level: "info", message: `Open interest is the exchange's prior-close OI (${today}); intraday positioning is not observable.` },
+    { level: "info", message: `Open interest is the exchange's OI as of the close before ${today}; intraday positioning is not observable.` },
     { level: "info", message: `Gamma from ${cfg.gammaSource === "own-bs" ? "our Black-Scholes using mid-implied vol (trading-time)" : "vendor greeks"}; dealer sign model "${cfg.dealerSign}".` },
   ];
   if (chain.stamp.mode === "DELAYED") notes.push({ level: "warn", message: `Chain is DELAYED (observed ${new Date(chain.stamp.observedAt).toISOString()}).` });

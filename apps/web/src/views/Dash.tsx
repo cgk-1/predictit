@@ -107,10 +107,25 @@ export function DashView() {
   const secondsToClose = Math.max(0, Math.round((s.clock.session.closeMs - now) / 1000));
   const reason = act === "PASS" ? d.passReasons[0] : act === "WAIT" ? d.whyWait[0] : null;
   const budget = s.settings.engine.maxPremiumPerContract;
+  // the other instrument's own native decision: shown as a sign check only (levels and sizes are not comparable)
+  const other = sm.instrument === "SPY" ? "SPX" : "SPY";
+  const otherAct = s.instruments?.[other]?.decision?.summary?.action ?? null;
+  const otherHasSetup = otherAct === "BUY CALL" || otherAct === "BUY PUT";
+  const disagree = hasSetup && otherHasSetup && otherAct !== act;
   return (
     <div className="dash">
       <div className="dash-row dash-row-top">
-        <Tile label={`Action · ${sm.instrument ?? "SPX"}`} className={`dash-action state-${cls}`} value={act} sub={primary ? `${primary.name} · ${primary.lifecycle}` : inClosing ? "closing window" : "—"} />
+        <Tile
+          label={`Action · ${sm.instrument ?? "SPX"}`}
+          className={`dash-action state-${cls}`}
+          value={act}
+          sub={
+            <>
+              {primary ? `${primary.name} · ${primary.lifecycle}` : inClosing ? "closing window" : "—"}
+              {otherAct ? <span className={disagree ? "dash-warn" : "muted"}> · {other} {otherAct}{disagree ? " — disagrees" : otherHasSetup ? " — agrees" : ""}</span> : null}
+            </>
+          }
+        />
         <Tile label="Lean" className={`dash-lean dash-lean-${sm.direction.toLowerCase()}`} value={sm.direction} sub={`${sm.strength} · ${Math.round(sm.agreement * 100)}% agree · ${d.lean.weightsMode === "learned" ? "learned weights" : "prior weights"}`} />
         <Tile
           label="Expected move to close (1σ)"
@@ -170,7 +185,7 @@ export function DashView() {
         </Tile>
         <Tile label="Market">
           <div className="dash-facts">
-            <span><b>SPX</b> <span className="mono">{fmtPts(spot, 2)}</span></span>
+            <span><b>SPX</b> <span className="mono">{fmtNum(s.spx?.last ?? null, 2)}</span></span>
             <span><b>SPY</b> <span className="mono">{fmtNum(s.spy?.last ?? null)}</span></span>
             <span><b>TICK</b> <span className="mono">{s.tick ? `${s.tick.last > 0 ? "+" : ""}${Math.round(s.tick.last)}` : "n/a"}</span>{s.tickFeatures.avg10 !== null ? <span className="muted mono"> / {Math.round(s.tickFeatures.avg10)}</span> : null}</span>
             <span><b>VIX</b> <span className="mono">{fmtNum(s.vix?.last ?? null, 1)}</span></span>

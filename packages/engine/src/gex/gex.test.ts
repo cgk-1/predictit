@@ -52,6 +52,6 @@ describe("GEX", () => {
     expect(s.flip.level!).toBeLessThan(7450);
     expect(s.walls.callWall).toBe(7450);
     expect(s.walls.putWall).toBe(7350);
-    expect(s.notes.some((n) => /prior-close OI/.test(n.message))).toBe(true);
+    expect(s.notes.some((n) => /OI as of the close before/.test(n.message))).toBe(true);
   });
 });
