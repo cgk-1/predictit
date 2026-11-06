@@ -137,8 +137,8 @@ export function decide(i: DecideInputs): DecisionRecord {
       }
     }
   } else if (!openPositions.length) {
-    if (passReasons.length) state = "PASS";
-    else if (primary && primary.lifecycle === "triggered" && ctx.frame.spxChain) {
+    // rank contracts whenever a triggered setup and a chain exist — also under PASS, for study (never executable)
+    if (primary && primary.lifecycle === "triggered" && ctx.frame.spxChain) {
       const rk: RankingResult = rankContracts({
         chain: ctx.frame.spxChain,
         asOf,
@@ -155,6 +155,9 @@ export function decide(i: DecideInputs): DecisionRecord {
       contracts = rk.ranked;
       rankingNotes = rk.notes.map((n) => n.message);
       rankingAssumptions = rk.assumptions;
+    }
+    if (passReasons.length) state = "PASS";
+    else if (primary && primary.lifecycle === "triggered" && ctx.frame.spxChain) {
       const eligible = contracts.filter((c) => c.eligible);
       if (!eligible.length) {
         state = "PASS";
@@ -241,13 +244,15 @@ export function diffDecisions(prev: DecisionRecord | null, next: DecisionRecord,
     return ev;
   }
   if (prev.state !== next.state) ev.push({ at, kind: "state", text: `${t} ${prev.state} → ${next.state}.` });
+  // setup lifecycle events: only armed/triggered setups are newsworthy (forming ones churn)
   const prevIds = new Map((prev.candidates ?? []).map((c) => [c.id, c.lifecycle]));
+  const newsworthy = (l: SetupCandidate["lifecycle"]) => l === "armed" || l === "triggered";
   for (const c of next.candidates) {
     const was = prevIds.get(c.id);
-    if (!was) ev.push({ at, kind: "setup", text: `${t} New setup: ${c.name} (${c.direction}) ${c.lifecycle}.` });
-    else if (was !== c.lifecycle && lifecycleRank(c.lifecycle) !== lifecycleRank(was)) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}): ${was} → ${c.lifecycle}.` });
+    if (!was && newsworthy(c.lifecycle)) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}) ${c.lifecycle}.` });
+    else if (was && was !== c.lifecycle && (newsworthy(c.lifecycle) || newsworthy(was))) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}): ${was} → ${c.lifecycle}.` });
   }
-  for (const c of prev.candidates ?? []) if (!next.candidates.some((n) => n.id === c.id)) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}) dropped (invalidated/expired).` });
+  for (const c of prev.candidates ?? []) if (newsworthy(c.lifecycle) && !next.candidates.some((n) => n.id === c.id)) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}) no longer ${c.lifecycle}.` });
   if (prevCtx) {
     const a = prevCtx.regime;
     const b = ctx.regime;

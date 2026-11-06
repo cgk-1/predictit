@@ -36,6 +36,8 @@ export interface IndicatorVote {
 export interface EnsembleWeights {
   /** indicator id → current weight */
   w: Record<string, number>;
+  /** indicator id → the prior the weight was learned relative to (for reconciliation when priors change) */
+  priors?: Record<string, number>;
   /** per-indicator prospective stats */
   stats: Record<string, { n: number; hits: number; brier: number }>;
   /** ensemble-level stats per horizon (n counts non-neutral, non-flat predictions; abstain = neutral lean) */
@@ -91,8 +93,31 @@ export const INDICATORS: IndicatorSpec[] = [
 
 export function initialWeights(now: number): EnsembleWeights {
   const w: Record<string, number> = {};
-  for (const i of INDICATORS) w[i.id] = i.priorWeight;
-  return { w, stats: {}, ensemble: {}, updatedAt: now, version: 1 };
+  const priors: Record<string, number> = {};
+  for (const i of INDICATORS) {
+    w[i.id] = i.priorWeight;
+    priors[i.id] = i.priorWeight;
+  }
+  return { w, priors, stats: {}, ensemble: {}, updatedAt: now, version: 1 };
+}
+
+/** Rebase stored weights when an indicator's prior changed or a new indicator was added (keeps the learned multiplier). */
+export function reconcileWeights(stored: EnsembleWeights): EnsembleWeights {
+  const w: Record<string, number> = { ...stored.w };
+  const priors: Record<string, number> = { ...(stored.priors ?? {}) };
+  for (const i of INDICATORS) {
+    const old = priors[i.id];
+    if (w[i.id] === undefined) w[i.id] = i.priorWeight;
+    else if (old !== undefined && old !== i.priorWeight && old > 0) w[i.id] = w[i.id]! * (i.priorWeight / old);
+    else if (old === undefined && w[i.id] !== undefined && w[i.id] === stored.priors?.[i.id]) w[i.id] = i.priorWeight;
+    if (old === undefined) {
+      // legacy record without priors: assume the stored weight sat at an older prior if it is not plausibly learned
+      const mult = w[i.id]! / i.priorWeight;
+      if (mult < 0.25 || mult > 3) w[i.id] = i.priorWeight;
+    }
+    priors[i.id] = i.priorWeight;
+  }
+  return { ...stored, w, priors };
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
@@ -333,7 +358,7 @@ export function scorePredictions(pending: PendingPrediction[], path: PricePoint[
     ens[key] = e;
     scored.push({ ...p, scoredAt: now, spotThen: px, ret, outcome, hit });
   }
-  return { weights: { w, stats, ensemble: ens, updatedAt: now, version: weights.version + 1 }, scored, pending: still };
+  return { weights: { w, priors: weights.priors ?? Object.fromEntries(INDICATORS.map((i) => [i.id, i.priorWeight])), stats, ensemble: ens, updatedAt: now, version: weights.version + 1 }, scored, pending: still };
 }
 
 export function wilson(hits: number, n: number, z = 1.96): { p: number; lo: number; hi: number } {

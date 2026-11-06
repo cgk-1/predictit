@@ -61,6 +61,7 @@ export function levelInteraction(path: PricePoint[], level: number, asOf: number
   }
   const last = pts[pts.length - 1]!;
   const side = sideOf(last.p);
+  const lvl = Number.isInteger(level) ? String(level) : level.toFixed(1);
   const dwellMs = lastCross ? asOf - lastCross.t : asOf - pts[0]!.t;
   // pattern classification (latest behaviour)
   let pattern: LevelInteraction["pattern"] = "none";
@@ -68,7 +69,7 @@ export function levelInteraction(path: PricePoint[], level: number, asOf: number
   const recent = crossTimes.filter((c) => c.t >= asOf - Math.min(opts.lookbackMs, 10 * 60_000));
   if (recent.length >= opts.pinCrossings) {
     pattern = "pinning";
-    text = `${recent.length} crossings of ${level} in the last ${Math.round(Math.min(opts.lookbackMs, 600000) / 60000)} min — oscillating around the strike.`;
+    text = `${recent.length} crossings of ${lvl} in the last ${Math.round(Math.min(opts.lookbackMs, 600000) / 60000)} min — oscillating around the strike.`;
   } else if (lastCross) {
     const held = dwellMs >= opts.holdMs;
     const prior = crossTimes.length >= 2 ? crossTimes[crossTimes.length - 2]! : null;
@@ -76,27 +77,27 @@ export function levelInteraction(path: PricePoint[], level: number, asOf: number
       // crossed and stayed: reclaim if there was an earlier opposite cross (i.e. lost then regained), else break-hold
       if (prior && prior.dir !== lastCross.dir) {
         pattern = "reclaim";
-        text = `${lastCross.dir === "up" ? "Reclaimed above" : "Lost below"} ${level} ${fmtAgo(dwellMs)} ago and held (${fmtAgo(dwellMs)}).`;
+        text = `${lastCross.dir === "up" ? "Reclaimed above" : "Lost below"} ${lvl} ${fmtAgo(dwellMs)} ago and held (${fmtAgo(dwellMs)}).`;
       } else {
         pattern = "break-hold";
-        text = `Broke ${lastCross.dir === "up" ? "above" : "below"} ${level} ${fmtAgo(dwellMs)} ago and held.`;
+        text = `Broke ${lastCross.dir === "up" ? "above" : "below"} ${lvl} ${fmtAgo(dwellMs)} ago and held.`;
       }
     } else {
       // crossed very recently: unknown hold yet
       if (prior && prior.dir !== lastCross.dir && lastCross.t - prior.t < opts.holdMs) {
         pattern = "failed-break";
-        text = `Crossed ${prior.dir === "up" ? "above" : "below"} ${level} then reversed within ${fmtAgo(lastCross.t - prior.t)} — failed break.`;
+        text = `Crossed ${prior.dir === "up" ? "above" : "below"} ${lvl} then reversed within ${fmtAgo(lastCross.t - prior.t)} — failed break.`;
       } else {
         pattern = "approaching";
-        text = `Just crossed ${lastCross.dir === "up" ? "above" : "below"} ${level} (${fmtAgo(dwellMs)} ago); hold not yet established.`;
+        text = `Just crossed ${lastCross.dir === "up" ? "above" : "below"} ${lvl} (${fmtAgo(dwellMs)} ago); hold not yet established.`;
       }
     }
   } else if (touches > 0) {
     pattern = "rejection";
-    text = `Touched ${level} ${touches} time(s) without crossing; price remains ${side}.`;
+    text = `Touched ${lvl} ${touches} time(s) without crossing; price remains ${side}.`;
   } else {
     pattern = "none";
-    text = `Price ${side} ${level} for the whole window (no interaction).`;
+    text = `Price ${side} ${lvl} for the whole window (no interaction).`;
   }
   return { level, side, dwellMs, crossings, lastCross, maxAbove, maxBelow, touches, pattern, patternText: text };
 }

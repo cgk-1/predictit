@@ -44,6 +44,7 @@ import {
   type ClosingSettings,
   type ReplayTrade,
   initialWeights,
+  reconcileWeights,
   makePredictions,
   scorePredictions,
   leanStats,
@@ -201,7 +202,8 @@ export class MarketSession extends DurableObject<Env> {
   private async loadState() {
     this.settings = (await this.ctx.storage.get<AppSettings>("settings")) ?? null;
     this.tokens = (await this.ctx.storage.get<SchwabTokens>("schwabTokens")) ?? null;
-    this.weights = (await this.ctx.storage.get<EnsembleWeights>("ensembleWeights")) ?? null;
+    const storedWeights = (await this.ctx.storage.get<EnsembleWeights>("ensembleWeights")) ?? null;
+    this.weights = storedWeights ? reconcileWeights(storedWeights) : null;
     this.pending = (await this.ctx.storage.get<PendingPrediction[]>("pendingPredictions")) ?? [];
     this.storedCreds = (await this.ctx.storage.get<{ clientId: string; clientSecret: string }>("schwabCreds")) ?? null;
     const ops = await this.ctx.storage.get<{ ticks: Tick[]; feeds: Record<string, FeedHealth>; lastChainFetch: Record<string, number>; lastHistoryFetch: number; lastPredictionMinute: number }>("ops");

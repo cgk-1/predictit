@@ -223,7 +223,7 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
       const dirs: Array<"call" | "put"> = dir ? [dir] : ["call", "put"];
       for (const d of dirs) {
         out.candidates.push({
-          ...base(ctx, "compression-expansion", d, `${boxL.toFixed(0)}-${boxH.toFixed(0)}`),
+          ...base(ctx, "compression-expansion", d, "box"),
           lifecycle: dir ? "triggered" : "armed",
           evidence: [ev(ctx, "15m compression", `${b.compression15.toFixed(2)}× median`), ev(ctx, "Box", `${boxL.toFixed(1)}–${boxH.toFixed(1)}`)],
           triggerCondition: `1-minute close ${d === "call" ? "above" : "below"} the compression box (${d === "call" ? boxH.toFixed(1) : boxL.toFixed(1)}).`,
@@ -267,7 +267,7 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
       }
       if (!dir) continue;
       out.candidates.push({
-        ...base(ctx, "level-reclaim-reject", dir, `${l.kind}-${l.level.toFixed(0)}`),
+        ...base(ctx, "level-reclaim-reject", dir, l.kind === "twap" || l.kind === "vwap" ? l.kind : `${l.kind}-${l.level.toFixed(0)}`),
         lifecycle,
         evidence: [ev(ctx, l.label, l.level.toFixed(1) + " (" + l.source + ")"), ev(ctx, "Interaction", li.patternText)],
         triggerCondition: `${li.pattern} at ${l.label} holding ≥90 s on the ${li.side} side.`,

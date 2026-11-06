@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INDICATORS, initialWeights, makePredictions, scorePredictions, leanStats, wilson, computeLean, DEFAULT_ENSEMBLE_CONFIG } from "./ensemble";
+import { INDICATORS, initialWeights, makePredictions, scorePredictions, leanStats, wilson, computeLean, reconcileWeights, DEFAULT_ENSEMBLE_CONFIG } from "./ensemble";
 import { buildContext } from "../decisions/context";
 import { etToMs } from "../time/et";
 import type { MarketFrame, Bar1m } from "../types";
@@ -75,6 +75,16 @@ describe("ensemble lean", () => {
     expect(leanStats(flat.weights).horizons["15m"]!.flat).toBe(1);
   });
 
+  it("rebases stored weights when an indicator prior changes, preserving the learned multiplier", () => {
+    const w = initialWeights(0);
+    const dow = INDICATORS.find((i) => i.id === "dow")!;
+    const stored = { ...w, w: { ...w.w, dow: 0.3 * 1.5 }, priors: { ...w.priors!, dow: 0.3 } }; // learned 1.5× an old prior of 0.3
+    const r = reconcileWeights(stored);
+    expect(r.w["dow"]).toBeCloseTo(dow.priorWeight * 1.5, 10);
+    expect(r.priors!["dow"]).toBe(dow.priorWeight);
+    const legacy = reconcileWeights({ ...w, priors: undefined, w: { ...w.w, dow: 0.3 } });
+    expect(legacy.w["dow"]).toBeCloseTo(0.3, 10); // within the clamp range → kept
+  });
   it("withholds calibrated probabilities until enough scored predictions exist", () => {
     const st = leanStats(initialWeights(0));
     expect(st.calibratedProbabilityAvailable).toBe(false);
