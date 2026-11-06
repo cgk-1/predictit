@@ -38,8 +38,8 @@ export interface EnsembleWeights {
   w: Record<string, number>;
   /** per-indicator prospective stats */
   stats: Record<string, { n: number; hits: number; brier: number }>;
-  /** ensemble-level stats per horizon */
-  ensemble: Record<string, { n: number; hits: number; brier: number; flat: number }>;
+  /** ensemble-level stats per horizon (n counts non-neutral, non-flat predictions; abstain = neutral lean) */
+  ensemble: Record<string, { n: number; hits: number; brier: number; flat: number; abstain: number }>;
   updatedAt: number;
   version: number;
 }
@@ -278,15 +278,17 @@ export function scorePredictions(pending: PendingPrediction[], path: PricePoint[
     const outcome: ScoredPrediction["outcome"] = Math.abs(ret) < cfg.flatThreshold ? "flat" : ret > 0 ? "up" : "down";
     const y = outcome === "up" ? 1 : outcome === "down" ? -1 : 0;
     const key = `${p.horizonMin}m`;
-    const e = ens[key] ?? { n: 0, hits: 0, brier: 0, flat: 0 };
+    const e = ens[key] ?? { n: 0, hits: 0, brier: 0, flat: 0, abstain: 0 };
     let hit: boolean | null = null;
     if (y !== 0) {
       const prob = 0.5 + 0.5 * Math.max(-1, Math.min(1, p.score)); // squash to a pseudo-probability for Brier
       const yb = y > 0 ? 1 : 0;
-      e.n++;
-      hit = Math.sign(p.score) === y && Math.abs(p.score) >= 0.12;
-      if (hit) e.hits++;
-      e.brier += (prob - yb) ** 2;
+      if (Math.abs(p.score) >= 0.12) {
+        e.n++;
+        hit = Math.sign(p.score) === y;
+        if (hit) e.hits++;
+        e.brier += (prob - yb) ** 2;
+      } else e.abstain++;
       for (const [id, v] of Object.entries(p.votes)) {
         const spec = INDICATORS.find((i) => i.id === id);
         if (!spec) continue;
@@ -318,7 +320,7 @@ export function wilson(hits: number, n: number, z = 1.96): { p: number; lo: numb
 }
 
 export interface LeanStats {
-  horizons: Record<string, { n: number; hitRate: number; ci: [number, number]; brier: number; flat: number; baselineBrier: 0.25 }>;
+  horizons: Record<string, { n: number; hitRate: number; ci: [number, number]; brier: number; flat: number; abstain: number; baselineBrier: 0.25 }>;
   indicators: Array<{ id: string; label: string; weight: number; prior: number; n: number; hitRate: number | null }>;
   calibratedProbabilityAvailable: boolean;
   note: string;
@@ -329,7 +331,7 @@ export function leanStats(weights: EnsembleWeights, cfg: EnsembleConfig = DEFAUL
   let total = 0;
   for (const [k, e] of Object.entries(weights.ensemble)) {
     const wi = wilson(e.hits, e.n);
-    horizons[k] = { n: e.n, hitRate: wi.p, ci: [wi.lo, wi.hi], brier: e.n ? e.brier / e.n : NaN, flat: e.flat, baselineBrier: 0.25 };
+    horizons[k] = { n: e.n, hitRate: wi.p, ci: [wi.lo, wi.hi], brier: e.n ? e.brier / e.n : NaN, flat: e.flat, abstain: e.abstain ?? 0, baselineBrier: 0.25 };
     total += e.n;
   }
   const indicators = INDICATORS.map((i) => {

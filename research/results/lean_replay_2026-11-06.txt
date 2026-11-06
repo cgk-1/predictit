@@ -1,0 +1,12 @@
+15m: n=31 hit=26% CI[14,43] brier=0.352 (baseline 0.25) flat=6
+60m: n=3 hit=0% CI[0,56] brier=0.443 (baseline 0.25) flat=0
+Calibrated probabilities withheld until ≥200 scored predictions (currently 34).
+weights moved most: [
+  { id: 'vwapSide', w: 0.263, prior: 0.8, n: 55, hit: 25 },
+  { id: 'mom30', w: 0.289, prior: 0.8, n: 55, hit: 29 },
+  { id: 'gammaMom', w: 0.67, prior: 1.2, n: 55, hit: 36 },
+  { id: 'mom15', w: 0.447, prior: 0.8, n: 55, hit: 36 },
+  { id: 'mom5', w: 0.359, prior: 0.6, n: 54, hit: 41 },
+  { id: 'walls', w: 0.931, prior: 0.7, n: 36, hit: 67 }
+]
+lean direction distribution: { DOWN: 27, NEUTRAL: 22, UP: 20 }

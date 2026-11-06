@@ -19,6 +19,15 @@ a prospective paper ledger; results accrue from here. The first replay (one part
   ablations; the number of strategy variants is fixed and documented, and any later search will be reported with the
   number of trials.
 
+## First pipeline checks (2026-11-06, one partial delayed session — not evidence)
+
+- `research/results/replay_2026-11-06_2026-11-06.md`: engine replay produced 1 trade and the baselines ran under
+  identical costs.
+- `research/results/lean_replay_2026-11-06.txt`: the ensemble learner scored ~50 fifteen-minute predictions on a
+  low-efficiency (chop) session; momentum-type indicators were wrong most of the time and their weights fell within
+  the clamps, while the wall-proximity indicator scored best. One day proves nothing except that scoring, bounded
+  updates, abstention and interval reporting work end-to-end on real data.
+
 ## What would change a label from "unvalidated"
 
 ≥ 60 sessions of LIVE as-of data, positive net expectancy after costs in the untouched test period, not driven by
