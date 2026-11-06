@@ -174,12 +174,17 @@ export function rankContracts(i: RankingInputs): RankingResult {
     });
   }
   // rank: eligible first; then by reward/risk (if target) else by least theta bleed per horizon relative to premium
+  // rank: eligible first; then reward/risk when a target exists; then proximity to a 0.45 delta (gamma per dollar
+  // without the all-or-nothing profile of far OTM or the capital of deep ITM); then tighter spread
   out.sort((a, b) => {
     if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
     const ra = a.rewardRisk ?? -Infinity;
     const rb = b.rewardRisk ?? -Infinity;
     if (ra !== rb) return rb - ra;
-    return a.atFlat.ret - b.atFlat.ret ? b.atFlat.ret - a.atFlat.ret : a.spreadPct - b.spreadPct;
+    const da = Math.abs(Math.abs(a.delta ?? 0) - 0.45);
+    const db = Math.abs(Math.abs(b.delta ?? 0) - 0.45);
+    if (Math.abs(da - db) > 0.03) return da - db;
+    return a.spreadPct - b.spreadPct;
   });
   if (!out.length) notes.push({ level: "warn", message: "No contracts in the tradable delta band (0.12–0.75) with a live ask." });
   return {

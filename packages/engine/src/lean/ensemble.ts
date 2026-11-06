@@ -103,6 +103,8 @@ export function initialWeights(now: number): EnsembleWeights {
 
 /** Rebase stored weights when an indicator's prior changed or a new indicator was added (keeps the learned multiplier). */
 export function reconcileWeights(stored: EnsembleWeights): EnsembleWeights {
+  const scored = Object.values(stored.ensemble ?? {}).reduce((a, e) => a + e.n, 0);
+  if (!stored.priors && scored === 0) return { ...initialWeights(stored.updatedAt), stats: stored.stats ?? {}, ensemble: stored.ensemble ?? {}, version: stored.version };
   const w: Record<string, number> = { ...stored.w };
   const priors: Record<string, number> = { ...(stored.priors ?? {}) };
   for (const i of INDICATORS) {

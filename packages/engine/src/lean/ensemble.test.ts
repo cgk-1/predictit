@@ -83,7 +83,9 @@ describe("ensemble lean", () => {
     expect(r.w["dow"]).toBeCloseTo(dow.priorWeight * 1.5, 10);
     expect(r.priors!["dow"]).toBe(dow.priorWeight);
     const legacy = reconcileWeights({ ...w, priors: undefined, w: { ...w.w, dow: 0.3 } });
-    expect(legacy.w["dow"]).toBeCloseTo(0.3, 10); // within the clamp range → kept
+    expect(legacy.w["dow"]).toBe(dow.priorWeight); // nothing learned yet → reset to current priors
+    const legacyLearned = reconcileWeights({ ...w, priors: undefined, w: { ...w.w, dow: 0.3 }, ensemble: { "15m": { n: 10, hits: 5, brier: 2.5, flat: 0, abstain: 0 } } });
+    expect(legacyLearned.w["dow"]).toBeCloseTo(0.3, 10); // learned, within clamp → kept
   });
   it("withholds calibrated probabilities until enough scored predictions exist", () => {
     const st = leanStats(initialWeights(0));
