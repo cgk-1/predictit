@@ -110,7 +110,8 @@ export function rankContracts(i: RankingInputs): RankingResult {
     const mid = o.bid > 0 && o.ask > 0 ? (o.bid + o.ask) / 2 : null;
     const spread = o.ask - o.bid;
     const spreadPct = mid ? spread / mid : Infinity;
-    const quoteAgeMs = i.asOf - o.quoteTime;
+    // freshness: a quote that has not changed since the last (fresh) chain fetch is as fresh as that fetch
+    const quoteAgeMs = Math.max(0, Math.min(i.asOf - o.quoteTime, i.asOf - i.chain.stamp.observedAt));
     const entry = o.ask;
     if (!(o.ask > 0.05)) {
       rejected++;

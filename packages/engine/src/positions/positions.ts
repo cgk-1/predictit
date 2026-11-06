@@ -49,7 +49,7 @@ export function markPosition(p: PaperPosition, chain: ChainSnapshot | null, spot
   const q: OptionQuote | undefined = chain?.options.find((o) => o.osi === p.osi);
   const bid = q && q.bid > 0 ? q.bid : null;
   const ask = q && q.ask > 0 ? q.ask : null;
-  const quoteAgeMs = q ? asOf - q.quoteTime : null;
+  const quoteAgeMs = q && chain ? Math.max(0, Math.min(asOf - q.quoteTime, asOf - chain.stamp.observedAt)) : null;
   const alerts: PositionMark["alerts"] = [];
   const expMs = expiryInstantMs(p.root, p.expiry);
   const secondsToExpiry = Math.max(0, (expMs - asOf) / 1000);

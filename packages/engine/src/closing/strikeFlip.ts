@@ -252,7 +252,7 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
       const evalQuote = (o: OptionQuote | undefined): QuoteEval | null => {
         if (!o || !(o.ask > 0)) return null;
         const spread = o.ask - o.bid;
-        const age = asOf - o.quoteTime;
+        const age = Math.max(0, Math.min(asOf - o.quoteTime, i.chain ? asOf - i.chain.stamp.observedAt : asOf - o.quoteTime));
         const be = breakevenWithCosts(o.right, o.strike, o.ask, s.costs);
         const fair0 = expectedIntrinsic(o.right, spot, sigmaUsedPts, o.strike);
         const fair1 = expectedIntrinsic(o.right, spot + driftPts, sigmaUsedPts, o.strike);

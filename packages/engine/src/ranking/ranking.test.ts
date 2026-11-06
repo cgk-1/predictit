@@ -37,6 +37,13 @@ describe("contract ranking", () => {
     expect(r.ranked[0]!.eligible).toBe(true);
     expect(r.assumptions.join(" ")).toMatch(/ask/);
   });
+  it("treats an unchanged quote as fresh when the chain fetch is fresh", () => {
+    const c = chain(7400, t - 60_000); // per-contract quoteTime 60 s old
+    c.stamp = { ...c.stamp, observedAt: t - 3000 }; // but fetched 3 s ago
+    const r = rankContracts({ chain: c, asOf: t, today: DATE, direction: "call", horizonMinutes: 30, targetLevel: 7425, invalidationLevel: 7390, preferredExpiry: "0DTE", minutesToClose: 300, limits });
+    expect(r.ranked[0]!.quoteAgeMs).toBe(3000);
+    expect(r.ranked[0]!.reasons.some((x) => /quote age/.test(x))).toBe(false);
+  });
   it("marks stale, wide or oversized contracts ineligible with reasons", () => {
     const c = chain(7400, t - 60_000);
     const r = rankContracts({ chain: c, asOf: t, today: DATE, direction: "put", horizonMinutes: 30, targetLevel: 7380, invalidationLevel: 7410, preferredExpiry: "0DTE", minutesToClose: 300, limits: { ...limits, maxPremiumPerContract: 500 } });
