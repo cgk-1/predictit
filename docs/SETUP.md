@@ -41,7 +41,9 @@ npx wrangler secret put SCHWAB_CLIENT_SECRET  # optional: same
 npx wrangler secret put ANTHROPIC_API_KEY     # optional: enables the "Explain" button (narration only)
 ```
 
-`.dev.vars.example` lists the same names for local `wrangler dev`.
+`.dev.vars.example` lists the same names for local `wrangler dev`. Secrets can equally be set in the dashboard
+(Workers & Pages → predictit → Settings → Variables and Secrets); `keep_vars: true` in `wrangler.jsonc` keeps
+dashboard-set values across `wrangler deploy` (without it a deploy silently drops them).
 
 ## 4. Cloudflare Access (recommended, one-time dashboard step)
 
