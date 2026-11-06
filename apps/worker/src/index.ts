@@ -117,6 +117,11 @@ async function handleApi(req: Request, env: Env, url: URL, sub: string): Promise
       await m.schwabDisconnect();
       return json({ ok: true });
     }
+    if (p === "/admin/archive" && req.method === "POST") {
+      const date = q.get("date");
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "date=YYYY-MM-DD required" }, { status: 400 });
+      return json(await m.archiveDate(date));
+    }
     if (p === "/explain" && req.method === "POST") {
       const body = (await req.json()) as { decisionId?: string };
       const st = await m.state();

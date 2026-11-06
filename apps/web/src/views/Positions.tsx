@@ -18,6 +18,7 @@ interface Draft {
   osi: string;
   qty: number | null;
   entryPremium: number | null;
+  manualEntryAt: boolean;
   entryAt: string;
   note: string;
   invalidationLevel: number | null;
@@ -31,7 +32,7 @@ interface Draft {
 }
 
 function emptyDraft(nowMs: number): Draft {
-  return { osi: "", qty: 1, entryPremium: null, entryAt: localDatetimeValue(nowMs), note: "", invalidationLevel: null, horizonMinutes: null, profitTargetPremium: null, trailActivateAt: null, trailPts: null, mode: "paper", decisionId: null, strategyId: null };
+  return { osi: "", qty: 1, entryPremium: null, manualEntryAt: false, entryAt: localDatetimeValue(nowMs), note: "", invalidationLevel: null, horizonMinutes: null, profitTargetPremium: null, trailActivateAt: null, trailPts: null, mode: "paper", decisionId: null, strategyId: null };
 }
 
 export function PositionsView() {
@@ -62,7 +63,6 @@ export function PositionsView() {
     patch({
       osi: c.osi,
       entryPremium: c.ask,
-      entryAt: localDatetimeValue(Date.now()),
       invalidationLevel: usingClosing ? d.closing?.recommendation.strike ?? null : d.primary?.invalidationLevel ?? null,
       horizonMinutes: usingClosing ? null : d.primary?.horizonMinutes ?? null,
       decisionId: d.id,
@@ -77,7 +77,7 @@ export function PositionsView() {
       setStatus({ kind: "err", text: "Contract, quantity and entry premium are required." });
       return;
     }
-    const entryAt = draft.entryAt ? new Date(draft.entryAt).getTime() : NaN;
+    const entryAt = draft.manualEntryAt && draft.entryAt ? new Date(draft.entryAt).getTime() : NaN;
     const body: OpenPositionInput = {
       osi: draft.osi.trim(),
       qty: draft.qty,
@@ -103,7 +103,7 @@ export function PositionsView() {
     }
   };
 
-  const entryAtMs = draft.entryAt ? new Date(draft.entryAt).getTime() : NaN;
+  const entryAtMs = draft.manualEntryAt && draft.entryAt ? new Date(draft.entryAt).getTime() : NaN;
 
   return (
     <>
@@ -220,7 +220,14 @@ export function PositionsView() {
             <TextField label="Contract (OSI)" value={draft.osi} onChange={(v) => patch({ osi: v })} mono placeholder="SPXW  261106C07400000" help="OSI/OCC symbol; Cboe style without padding is accepted." />
             <NumberField label="Quantity" value={draft.qty} onChange={(v) => patch({ qty: v })} min={1} step={1} />
             <NumberField label="Entry premium" value={draft.entryPremium} onChange={(v) => patch({ entryPremium: v })} min={0} step={0.01} help="Per contract, in points (×100 = USD)." />
-            <TextField label="Entry time (your local clock)" type="datetime-local" value={draft.entryAt} onChange={(v) => patch({ entryAt: v })} mono help={Number.isFinite(entryAtMs) ? `= ${fmtDateTime(entryAtMs)}` : "defaults to server time"} />
+            <div className="field">
+              <label className="toggle">
+                <input type="checkbox" checked={draft.manualEntryAt} onChange={(e) => patch({ manualEntryAt: e.target.checked, entryAt: localDatetimeValue(Date.now()) })} />
+                <span>Set the entry time manually</span>
+              </label>
+              <span className="help">Off: the server records its own time ({fmtTime(now)} ET now).</span>
+            </div>
+            {draft.manualEntryAt ? <TextField label="Entry time (your local clock)" type="datetime-local" value={draft.entryAt} onChange={(v) => patch({ entryAt: v })} mono help={Number.isFinite(entryAtMs) ? `= ${fmtDateTime(entryAtMs)}` : "enter a valid time"} /> : null}
             <SelectField
               label="Mode"
               value={draft.mode}

@@ -49,13 +49,25 @@ export const GexChart = memo(function GexChart({ rows, spot, flip, callWall, put
     );
   }
   const { x, y, bw, labelEvery, yTicks } = m;
-  const markers: Array<{ k: number | null; label: string; color: string; dash?: string; row: number }> = [
-    { k: spot, label: `spot ${fmtPts(spot, 1)}`, color: "var(--text)", row: 0 },
-    { k: flip, label: `zero-γ ${fmtPts(flip, 0)}`, color: "var(--replay)", dash: "4 3", row: 1 },
-    { k: callWall, label: "call wall", color: "var(--call)", dash: "2 3", row: 2 },
-    { k: putWall, label: "put wall", color: "var(--put)", dash: "2 3", row: 2 },
-    { k: largest0dte, label: "largest 0DTE", color: "var(--replay)", dash: "1 3", row: 1 },
+  const raw: Array<{ k: number | null; label: string; color: string; dash?: string }> = [
+    { k: spot, label: `spot ${fmtPts(spot, 1)}`, color: "var(--text)" },
+    { k: flip, label: `zero-γ ${fmtPts(flip, 0)}`, color: "var(--replay)", dash: "4 3" },
+    { k: callWall, label: `call wall ${callWall ?? ""}`, color: "var(--call)", dash: "2 3" },
+    { k: putWall, label: `put wall ${putWall ?? ""}`, color: "var(--put)", dash: "2 3" },
+    { k: largest0dte, label: `largest 0DTE ${largest0dte ?? ""}`, color: "var(--replay)", dash: "1 3" },
   ];
+  // assign label rows so labels whose x positions are within ~80px do not overlap
+  const placed: Array<{ x: number; row: number }> = [];
+  const markers = raw
+    .filter((mk): mk is typeof mk & { k: number } => mk.k !== null)
+    .sort((a, b) => a.k - b.k)
+    .map((mk) => {
+      const mx = x(mk.k);
+      let row = 0;
+      while (placed.some((p) => p.row === row && Math.abs(p.x - mx) < 84)) row++;
+      placed.push({ x: mx, row });
+      return { ...mk, row: row % 3 };
+    });
   return (
     <div ref={ref} className="chart">
       <svg viewBox={`0 0 ${width} ${H}`} width={width} height={H} role="img" aria-label="Gamma exposure by strike">
@@ -90,16 +102,14 @@ export const GexChart = memo(function GexChart({ rows, spot, flip, callWall, put
             </g>
           );
         })}
-        {markers.map((mk) =>
-          mk.k !== null ? (
-            <g key={mk.label}>
-              <line x1={x(mk.k)} x2={x(mk.k)} y1={M.top - 4} y2={H - M.bottom} stroke={mk.color} strokeDasharray={mk.dash} strokeWidth={1} />
-              <text x={x(mk.k) + 3} y={M.top - 20 + mk.row * 9} fill={mk.color} fontSize={9.5} style={{ paintOrder: "stroke", stroke: "var(--surface)", strokeWidth: 3 }}>
-                {mk.label}
-              </text>
-            </g>
-          ) : null,
-        )}
+        {markers.map((mk) => (
+          <g key={mk.label}>
+            <line x1={x(mk.k)} x2={x(mk.k)} y1={M.top - 4} y2={H - M.bottom} stroke={mk.color} strokeDasharray={mk.dash} strokeWidth={1} />
+            <text x={x(mk.k) + 3} y={M.top - 22 + mk.row * 10} fill={mk.color} fontSize={9.5} style={{ paintOrder: "stroke", stroke: "var(--surface)", strokeWidth: 3 }}>
+              {mk.label}
+            </text>
+          </g>
+        ))}
       </svg>
       <div className="chart-legend">
         <span>

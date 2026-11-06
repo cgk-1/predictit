@@ -57,8 +57,8 @@ export const GexProfile = memo(function GexProfile({ profile, profile0dte, spot,
             </text>
           </g>
         ))}
-        {xTicks.map((s) => (
-          <text key={s} className="axis" x={x(s)} y={H - 7} textAnchor="middle">
+        {xTicks.map((s, i) => (
+          <text key={s} className="axis" x={x(s)} y={H - 7} textAnchor={i === 0 ? "start" : i === xTicks.length - 1 ? "end" : "middle"}>
             {fmtPts(s, 0)}
           </text>
         ))}

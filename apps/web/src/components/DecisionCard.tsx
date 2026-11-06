@@ -157,7 +157,7 @@ export function DecisionCard({ decision: d, now, compact }: { decision: Decision
         )}
         {d.passReasons.length > 0 && (
           <div>
-            <div className="section-title">Why pass?</div>
+            <div className="section-title">{d.state === "PASS" ? "Why pass?" : "Pass conditions recorded (overridden by the closing-window module)"}</div>
             <ul className="reasons">
               {d.passReasons.map((r, i) => (
                 <li key={i}>{r}</li>

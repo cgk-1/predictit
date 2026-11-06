@@ -3,13 +3,15 @@ import { useCallback, useEffect, useState } from "react";
 export type Theme = "dark" | "light";
 const KEY = "predictit.theme";
 
+/** Stored choice first; otherwise the attribute index.html ships with (dark by default). */
 function readStored(): Theme {
   try {
     const v = localStorage.getItem(KEY);
-    return v === "light" ? "light" : "dark";
+    if (v === "light" || v === "dark") return v;
   } catch {
-    return "dark";
+    /* storage unavailable */
   }
+  return typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark";
 }
 
 export function useTheme(): [Theme, (t: Theme) => void] {

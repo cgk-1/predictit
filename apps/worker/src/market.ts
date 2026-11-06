@@ -808,30 +808,42 @@ export class MarketSession extends DurableObject<Env> {
   }
 
   // ---------- archive & prune ----------
+  /** Force-archive one date to R2 (operational endpoint; re-archiving overwrites the objects). Does not prune. */
+  async archiveDate(date: string): Promise<{ date: string; rows: number; bytes: number }> {
+    const r = await this.archiveOne(date, Date.now());
+    return { date, ...r };
+  }
+
+  private async archiveOne(d: string, now: number): Promise<{ rows: number; bytes: number }> {
+    const s = this.getSettings();
+    let rows = 0;
+    let bytes = 0;
+    for (const kind of SNAP_KINDS) {
+      const r = this.sql.exec<{ received_at: number; observed_at: number; source: string; mode: string; body: ArrayBuffer }>(`SELECT received_at, observed_at, source, mode, body FROM snapshots WHERE date = ? AND kind = ? ORDER BY received_at`, d, kind).toArray().filter((row) => s.archiveCboe || row.source !== "cboe-delayed");
+      if (!r.length) continue;
+      const lines: string[] = [];
+      for (const row of r) lines.push(JSON.stringify({ receivedAt: row.received_at, observedAt: row.observed_at, source: row.source, mode: row.mode, kind, payload: JSON.parse(await gunzip(row.body)) }));
+      const gz = await gzip(lines.join("\n"));
+      await this.env.ARCHIVE.put(`snapshots/${d}/${kind}.jsonl.gz`, gz, { httpMetadata: { contentType: "application/gzip" } });
+      rows += r.length;
+      bytes += gz.byteLength;
+    }
+    const decs = this.decisions(d);
+    if (decs.length) await this.env.ARCHIVE.put(`decisions/${d}.json`, JSON.stringify(decs), { httpMetadata: { contentType: "application/json" } });
+    const preds = this.sql.exec<{ body: string }>(`SELECT body FROM predictions WHERE date = ? ORDER BY at`, d).toArray().map((r) => r.body);
+    if (preds.length) await this.env.ARCHIVE.put(`predictions/${d}.jsonl`, preds.join("\n"), { httpMetadata: { contentType: "application/jsonl" } });
+    this.sql.exec(`INSERT OR REPLACE INTO archive_log (date, archived_at, rows, bytes) VALUES (?,?,?,?)`, d, now, rows, bytes);
+    this.recordChange({ at: now, kind: "data", text: `Archived ${d}: ${rows} snapshots (${(bytes / 1e6).toFixed(1)} MB), ${decs.length} decisions to R2.` });
+    return { rows, bytes };
+  }
+
   private async maybeArchiveAndPrune(now: number): Promise<void> {
     const s = this.getSettings();
     const today = etDate(now);
     const dates = this.sql.exec<{ date: string }>(`SELECT DISTINCT date FROM snapshots WHERE date < ? ORDER BY date`, today).toArray().map((r) => r.date);
     for (const d of dates) {
       const already = this.sql.exec<{ date: string }>(`SELECT date FROM archive_log WHERE date = ?`, d).toArray().length > 0;
-      if (!already) {
-        let rows = 0;
-        let bytes = 0;
-        for (const kind of SNAP_KINDS) {
-          const r = this.sql.exec<{ received_at: number; observed_at: number; source: string; mode: string; body: ArrayBuffer }>(`SELECT received_at, observed_at, source, mode, body FROM snapshots WHERE date = ? AND kind = ? ORDER BY received_at`, d, kind).toArray().filter((row) => s.archiveCboe || row.source !== "cboe-delayed");
-          if (!r.length) continue;
-          const lines: string[] = [];
-          for (const row of r) lines.push(JSON.stringify({ receivedAt: row.received_at, observedAt: row.observed_at, source: row.source, mode: row.mode, kind, payload: JSON.parse(await gunzip(row.body)) }));
-          const gz = await gzip(lines.join("\n"));
-          await this.env.ARCHIVE.put(`snapshots/${d}/${kind}.jsonl.gz`, gz, { httpMetadata: { contentType: "application/gzip" } });
-          rows += r.length;
-          bytes += gz.byteLength;
-        }
-        const decs = this.decisions(d);
-        if (decs.length) await this.env.ARCHIVE.put(`decisions/${d}.json`, JSON.stringify(decs), { httpMetadata: { contentType: "application/json" } });
-        this.sql.exec(`INSERT INTO archive_log (date, archived_at, rows, bytes) VALUES (?,?,?,?)`, d, now, rows, bytes);
-        this.recordChange({ at: now, kind: "data", text: `Archived ${d}: ${rows} snapshots (${(bytes / 1e6).toFixed(1)} MB) to R2.` });
-      }
+      if (!already) await this.archiveOne(d, now);
       const cutoff = new Date(now - s.retentionDays * 86400000).toISOString().slice(0, 10);
       if (d < cutoff) this.sql.exec(`DELETE FROM snapshots WHERE date = ?`, d);
     }

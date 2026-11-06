@@ -110,7 +110,23 @@ export const PriceChart = memo(function PriceChart({ bars: allBars, levels, spot
     const xTicks: number[] = [];
     for (let t = etToMs(date, 10, 0); t <= x1; t += 30 * 60_000) xTicks.push(t);
     const cw = Math.max(1, Math.min(8, pw / ((x1 - x0) / 60_000) - 1));
-    return { x, y, yTicks, xTicks, cw, lo, hi, shown, pw, ph, x0, x1, bars };
+    // labels: merge levels at (almost) the same price, then push apart vertically so none overlap
+    const merged: Array<{ level: number; kinds: KeyLevel["kind"][]; text: string }> = [];
+    for (const l of [...shown].sort((a, b) => b.level - a.level)) {
+      const last = merged[merged.length - 1];
+      if (last && Math.abs(last.level - l.level) < (hi - lo) * 0.004) {
+        last.kinds.push(l.kind);
+        last.text = `${last.text} / ${SHORT[l.kind] || l.kind}`;
+      } else merged.push({ level: l.level, kinds: [l.kind], text: SHORT[l.kind] || l.kind });
+    }
+    const labels: Array<{ level: number; kind: KeyLevel["kind"]; text: string; ly: number }> = [];
+    let prevY = -Infinity;
+    for (const m of merged) {
+      const ly = Math.max(y(m.level) - 3, prevY + 11);
+      labels.push({ level: m.level, kind: m.kinds[0]!, text: `${m.text} ${fmtPts(m.level, 1)}`, ly });
+      prevY = ly;
+    }
+    return { x, y, yTicks, xTicks, cw, lo, hi, shown, pw, ph, x0, x1, bars, labels };
   }, [allBars, levels, spot, width]);
 
   if (!model) {
@@ -120,7 +136,7 @@ export const PriceChart = memo(function PriceChart({ bars: allBars, levels, spot
       </div>
     );
   }
-  const { x, y, yTicks, xTicks, cw, shown, bars } = model;
+  const { x, y, yTicks, xTicks, cw, shown, bars, labels } = model;
   return (
     <div ref={ref} className="chart">
       <svg viewBox={`0 0 ${width} ${H}`} width={width} height={H} role="img" aria-label="SPX one-minute candles with key levels">
@@ -141,13 +157,12 @@ export const PriceChart = memo(function PriceChart({ bars: allBars, levels, spot
           </g>
         ))}
         {shown.map((l, i) => (
-          <g key={`${l.kind}-${i}`}>
-            <line x1={M.left} x2={width - M.right} y1={y(l.level)} y2={y(l.level)} stroke={levelColor(l.kind)} strokeDasharray="4 3" strokeWidth={1} opacity={0.8} />
-            <text x={width - M.right - 4} y={y(l.level) - 3} textAnchor="end" fill={levelColor(l.kind)} style={{ paintOrder: "stroke", stroke: "var(--surface)", strokeWidth: 3 }}>
-              {SHORT[l.kind] ? `${SHORT[l.kind]} ` : ""}
-              {fmtPts(l.level, 1)}
-            </text>
-          </g>
+          <line key={`${l.kind}-${i}`} x1={M.left} x2={width - M.right} y1={y(l.level)} y2={y(l.level)} stroke={levelColor(l.kind)} strokeDasharray="4 3" strokeWidth={1} opacity={0.8} />
+        ))}
+        {labels.map((l) => (
+          <text key={`lbl-${l.level}`} x={width - M.right - 4} y={l.ly} textAnchor="end" fill={levelColor(l.kind)} style={{ paintOrder: "stroke", stroke: "var(--surface)", strokeWidth: 3 }}>
+            {l.text}
+          </text>
         ))}
         {bars.map((b) => {
           const up = b.c >= b.o;

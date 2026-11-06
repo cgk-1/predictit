@@ -1323,3 +1323,37 @@ code {
   width: 1px;
   background: var(--text);
 }
+
+/* ---------- phone-width refinements ---------- */
+@media (max-width: 640px) {
+  .clock-phase {
+    display: none;
+  }
+  .feedchip span:not(.feedchip-dot):nth-child(n + 3) {
+    display: none;
+  }
+  .feedchip-tick {
+    display: none;
+  }
+  .decision-state {
+    font-size: 28px;
+  }
+  .summary-action {
+    font-size: 26px;
+  }
+  .sr-row {
+    grid-template-columns: max-content max-content minmax(0, 1fr);
+  }
+  .sr-label {
+    white-space: normal;
+  }
+  .sr-bar {
+    grid-column: 1 / 3;
+  }
+  .sr-strength {
+    text-align: left;
+  }
+  .content {
+    padding-top: 12px;
+  }
+}
