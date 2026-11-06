@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { etToMs, fmtGexUsd, type DecisionRecord } from "@predictit/engine";
 import { api } from "../api/client";
 import type { ReplayResponse } from "../api/types";
-import { useServerNow } from "../api/context";
+import { useServer, useServerNow } from "../api/context";
 import { ChangesFeed } from "../components/ChangesFeed";
 import { DecisionCard } from "../components/DecisionCard";
 import { StateBadge } from "../components/Badges";
@@ -28,6 +28,7 @@ export function ReplayView() {
   const [busy, setBusy] = useState(false);
   const reqRef = useRef(0);
   const serverNow = useServerNow();
+  const budgetUsd = useServer().state?.settings.engine.maxPremiumPerContract;
 
   useEffect(() => {
     if (!date && dates.data?.length) setDate(dates.data[0]!.date);
@@ -160,8 +161,8 @@ export function ReplayView() {
               </span>
             ) : null}
           </div>
-          <SummaryCard summary={d.summary} lean={d.lean} now={at} />
-          <DecisionCard decision={d} now={at} />
+          <SummaryCard summary={d.summary} lean={d.lean} now={at} budgetUsd={budgetUsd} />
+          <DecisionCard decision={d} now={at} id="replay-decision-record" />
           <div className="grid-2">
             <RegimePanel regime={ctx?.regime ?? null} now={at} />
             <LevelsLadder levels={ctx?.levels ?? []} spot={fs?.spx ?? null} spotTime={fs?.spotTime ?? null} />
@@ -206,7 +207,7 @@ export function ReplayView() {
           </div>
         )}
       </Panel>
-      <ChangesFeed changes={changes.data ?? []} title={`Change feed for ${date}`} limit={500} />
+      <ChangesFeed changes={changes.data ?? []} title={`Change feed for ${date}`} limit={20} />
       <p className="xs muted">Server clock while you read this: {fmtTime(serverNow)} ET.</p>
     </>
   );

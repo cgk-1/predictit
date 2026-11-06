@@ -1,10 +1,13 @@
 import { CLOSING_METHOD_NOTES, subWindowFor, type ClosingSubWindow } from "@predictit/engine";
+import { api } from "../api/client";
 import { useServer, useServerNow } from "../api/context";
 import { ModeBadge, stateClass, ValidationChip } from "../components/Badges";
+import { LearningBox } from "../components/Grades";
 import { Notes } from "../components/Notes";
 import { Empty, Fact, Panel, Stat } from "../components/Panel";
 import { StrikeLadder } from "../components/StrikeLadder";
 import { LeanStrip } from "../components/LeanStrip";
+import { useFetch } from "../lib/useFetch";
 import { fmtClock, fmtContract, fmtMs, fmtPremium, fmtPts, fmtSignedPts, fmtSignedUsd, fmtTime, fmtUsd } from "../lib/format";
 
 const WINDOWS: Array<{ id: ClosingSubWindow; label: string }> = [
@@ -19,6 +22,7 @@ const WINDOWS: Array<{ id: ClosingSubWindow; label: string }> = [
 export function ClosingView() {
   const { state: s } = useServer();
   const now = useServerNow();
+  const grades = useFetch((sig) => api.grades(sig), "grades", 60_000);
   if (!s) return <Empty>Connecting…</Empty>;
   const c = s.closing;
   const liveSub = subWindowFor(s.clock);
@@ -54,6 +58,7 @@ export function ClosingView() {
           <span className="muted small">{secondsToClose > 0 ? "to the close (server clock)" : `closed at ${fmtTime(s.clock.session.closeMs)} ET`}</span>
         </div>
       </Panel>
+      {grades.data ? <LearningBox learner={grades.data.closing.learner} /> : null}
     </>
   );
 

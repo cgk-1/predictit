@@ -12,6 +12,10 @@
 
   --radius: 6px;
   --radius-sm: 4px;
+  /* spacing scale: everything in the layout is a multiple of these three */
+  --sp-1: 12px;
+  --sp-2: 16px;
+  --sp-3: 24px;
   --gutter: 16px;
   --content-max: 1240px;
   --rail-w: 208px;
@@ -47,6 +51,8 @@
   --danger-tint: rgba(255, 107, 107, 0.12);
 
   --grid-line: rgba(230, 232, 235, 0.07);
+  /* row dividers inside tables, ladders and feeds: lighter than a panel border */
+  --divider: rgba(230, 232, 235, 0.07);
   --candle-up: #3ecfa6;
   --candle-down: #ff6b8a;
 }
@@ -82,6 +88,7 @@
   --danger-tint: rgba(198, 40, 40, 0.1);
 
   --grid-line: rgba(21, 25, 30, 0.08);
+  --divider: rgba(21, 25, 30, 0.08);
   --candle-up: #0d8c6c;
   --candle-down: #c6294f;
 }

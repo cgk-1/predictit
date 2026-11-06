@@ -27,7 +27,24 @@ import type {
   EnsembleWeights,
   ScoredPrediction,
   EnsembleConfig,
+  TickFeatures,
+  DecisionGrade,
+  GradeSummary,
+  ClosingGrade,
 } from "@predictit/engine";
+
+export interface ClosingLearnerSummary {
+  gradedSessions: number;
+  officialGaps: number;
+  rmsZ: number | null;
+  driftSlope: number | null;
+  rmsSettlementGapPts: number | null;
+  patterns: Record<string, { n: number; hitRate: number | null; ci: [number, number] | null; trust: number }>;
+  subWindows: Record<string, { n: number; avgPnlUsd: number | null; hitRate: number | null }>;
+  parameters: { seasonalityMultiplier: number; driftPersistence: number; settlementNoisePts: number; base: { seasonalityMultiplier: number; driftPersistence: number; settlementNoisePts: number } };
+  note: string;
+}
+export interface GradesResponse { grades: DecisionGrade[]; summary: GradeSummary; closing: { grades: ClosingGrade[]; learner: ClosingLearnerSummary } }
 
 export interface LeanResponse { stats: LeanStats; weights: EnsembleWeights; pending: number; recent: ScoredPrediction[]; config: EnsembleConfig }
 
@@ -70,6 +87,12 @@ export interface ServerState {
   tickStats: { n: number; avgMs: number | null };
   spx: IndexQuote | null;
   spy: IndexQuote | null;
+  /** NYSE TICK and VIX quotes (Schwab live only; null on delayed feeds) */
+  tick: IndexQuote | null;
+  vix: IndexQuote | null;
+  tickFeatures: TickFeatures;
+  /** summary of continuous self-grading of past recommendations */
+  grades: GradeSummary;
   decision: DecisionRecord | null;
   decisionAgeMs: number | null;
   regime: RegimeAssessment | null;
@@ -115,6 +138,7 @@ export type ChainResponse = ChainSnapshot | null;
  *  POST /api/positions/:id/close        { premium, reason? } → PaperPosition
  *  GET  /api/settings / PUT /api/settings (partial AppSettings) → AppSettings
  *  GET  /api/lean                       → { stats: LeanStats, weights: EnsembleWeights, pending: number, recent: ScoredPrediction[], config }
+ *  GET  /api/grades                     → GradesResponse (self-grading of recommendations + closing-window grades and learned parameters)
  *  GET  /api/schwab/status → SchwabStatus; GET /api/schwab/auth-url → { url, redirectUri }
  *  POST /api/schwab/credentials { clientId, clientSecret } → SchwabStatus (write-only; never echoed back)
  *  POST /api/schwab/callback { redirectedUrl } → SchwabStatus; POST /api/schwab/disconnect

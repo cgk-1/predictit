@@ -8,7 +8,7 @@ import { FeedHealthTable } from "../components/FeedHealth";
 import { Empty, Panel } from "../components/Panel";
 import type { Theme } from "../lib/theme";
 import { useFetch } from "../lib/useFetch";
-import { fmtAgo, fmtDateTime, fmtMs, fmtTime } from "../lib/format";
+import { fmtAgo, fmtDateTime, fmtMs, fmtTime, fmtUsd } from "../lib/format";
 
 type Saver = (patch: SettingsPatch) => Promise<void>;
 
@@ -48,7 +48,7 @@ function Budgets({ s, save }: { s: AppSettings; save: Saver }) {
   return (
     <Panel title="Budgets">
       <div className="form-grid">
-        <NumberField label="Max premium per contract (USD)" value={f.draft.maxPremiumPerContract} onChange={(v) => f.set({ maxPremiumPerContract: v ?? 0 })} min={0} step={1} />
+        <NumberField label="Max premium per contract, USD — applies to SPX and SPY ranking and to the closing window" value={f.draft.maxPremiumPerContract} onChange={(v) => f.set({ maxPremiumPerContract: v ?? 0 })} min={0} step={1} help={`Current value on the server: ${fmtUsd(s.engine.maxPremiumPerContract)} (ask × 100). Contracts above it are ranked but never recommended.`} />
         <NumberField label="Max open risk (USD)" value={f.draft.maxOpenRiskUsd} onChange={(v) => f.set({ maxOpenRiskUsd: v ?? 0 })} min={0} step={1} help="Sum of premium × 100 × qty across open positions." />
         <NumberField label="Daily loss limit (USD)" value={f.draft.dailyLossLimit} onChange={(v) => f.set({ dailyLossLimit: v ?? 0 })} min={0} step={1} help="Reaching it turns the decision to PASS; no loss-recovery sizing." />
       </div>

@@ -5,7 +5,7 @@
  * (the app reloads so the Worker can serve its login shell).
  */
 import type { ChangeEvent, DecisionRecord, PaperPosition } from "@predictit/engine";
-import type { AppSettings, BarsResponse, ChainResponse, DateEntry, LeanResponse, PerformanceResponse, ReplayResponse, SchwabStatus, ServerState } from "./types";
+import type { AppSettings, BarsResponse, ChainResponse, DateEntry, GradesResponse, LeanResponse, PerformanceResponse, ReplayResponse, SchwabStatus, ServerState } from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -95,6 +95,7 @@ export const api = {
   getSettings: (signal?: AbortSignal) => apiFetch<AppSettings>("/api/settings", { signal }),
   putSettings: (patch: SettingsPatch) => apiFetch<AppSettings>("/api/settings", { method: "PUT", json: patch }),
   lean: (signal?: AbortSignal) => apiFetch<LeanResponse>("/api/lean", { signal }),
+  grades: (signal?: AbortSignal) => apiFetch<GradesResponse>("/api/grades", { signal }),
   schwabStatus: () => apiFetch<SchwabStatus>("/api/schwab/status"),
   schwabCredentials: (clientId: string, clientSecret: string) => apiFetch<SchwabStatus>("/api/schwab/credentials", { json: { clientId, clientSecret } }),
   schwabAuthUrl: () => apiFetch<{ url: string; redirectUri: string }>("/api/schwab/auth-url"),

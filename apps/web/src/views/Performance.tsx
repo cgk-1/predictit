@@ -2,6 +2,7 @@ import type { PerformanceReport } from "@predictit/engine";
 import { api } from "../api/client";
 import { Empty, Panel, Stat } from "../components/Panel";
 import { DirectionChip } from "../components/Badges";
+import { ClosingLearning, SelfGrading } from "../components/Grades";
 import { useFetch } from "../lib/useFetch";
 import { fmtAgo, fmtContract, fmtNum, fmtPct, fmtPremium, fmtPts, fmtSignedPct, fmtSignedUsd, fmtTime, fmtUsd } from "../lib/format";
 
@@ -67,6 +68,7 @@ function Breakdown<T extends { n: number; totalUsd: number; winRate?: number }>(
 
 export function PerformanceView() {
   const q = useFetch((sig) => api.performance(sig), "performance", 60_000);
+  const g = useFetch((sig) => api.grades(sig), "grades", 60_000);
   if (q.error && !q.data) return <Empty>Cannot load performance: {q.error}</Empty>;
   if (!q.data) return <Empty>Loading…</Empty>;
   const { trades, report, ledger } = q.data;
@@ -110,6 +112,14 @@ export function PerformanceView() {
         <Breakdown title="By phase" rows={report.byPhase} />
         <Breakdown title="By regime (trend/gamma)" rows={report.byRegime} />
       </div>
+      {g.data ? (
+        <>
+          <SelfGrading g={g.data} />
+          <ClosingLearning g={g.data} />
+        </>
+      ) : (
+        <Panel title="Self-grading">{g.error ? <p className="form-status form-status-err">Cannot load grades: {g.error}</p> : <p className="muted small">Loading grades…</p>}</Panel>
+      )}
       <Panel title="Trades" meta={<span>closed paper and manual positions</span>}>
         {!trades.length ? (
           <p className="muted small">No closed trades yet.</p>

@@ -1,7 +1,7 @@
 import type { IndicatorFamily, LeanResult } from "@predictit/engine";
 import { api } from "../api/client";
 import { useServer, useServerNow } from "../api/context";
-import { leanClass } from "../components/LeanStrip";
+import { leanClass, weightsModeText } from "../components/LeanStrip";
 import { Empty, Panel, Stat } from "../components/Panel";
 import { useFetch } from "../lib/useFetch";
 import { fmtAgo, fmtNum, fmtPct, fmtSignedPct, fmtTime } from "../lib/format";
@@ -63,18 +63,18 @@ function GroupRows({ family, rows }: { family: IndicatorFamily; rows: LeanResult
   return (
     <>
       <tr>
-        <th scope="rowgroup" colSpan={6} style={{ textAlign: "left", background: "var(--surface-3)" }}>
+        <th scope="rowgroup" colSpan={6} className="group-row">
           {family}
         </th>
       </tr>
       {rows.map((v) => (
-        <tr key={v.id} className={v.vote === null ? "row-bad" : ""}>
+        <tr key={v.id} className={v.vote === null ? "row-quiet" : ""}>
           <td>
             {v.label} <span className="xs muted mono">{v.id}</span>
           </td>
-          <td className={`num ${v.vote !== null && v.vote > 0 ? "pos" : v.vote !== null && v.vote < 0 ? "neg" : ""}`}>{v.vote === null ? "n/a" : v.vote.toFixed(2)}</td>
-          <td className="num">{v.weight.toFixed(2)}</td>
-          <td className={`num ${v.contribution > 0 ? "pos" : v.contribution < 0 ? "neg" : ""}`}>{v.contribution.toFixed(2)}</td>
+          <td className={`num ${v.vote !== null && v.vote > 0 ? "pos" : v.vote !== null && v.vote < 0 ? "neg" : ""}`}>{v.vote === null ? <span className="na">unavailable</span> : v.vote.toFixed(2)}</td>
+          <td className="num">{v.vote === null ? "—" : v.weight.toFixed(2)}</td>
+          <td className={`num ${v.contribution > 0 ? "pos" : v.contribution < 0 ? "neg" : ""}`}>{v.vote === null ? "—" : v.contribution.toFixed(2)}</td>
           <td title={EVIDENCE_TEXT[v.evidence]}>{v.evidence}</td>
           <td className="wrap">{v.reason}</td>
         </tr>
@@ -105,7 +105,7 @@ export function LeanView() {
             <>
               <span>as of {fmtTime(lean.asOf)} ET ({fmtAgo(now - lean.asOf)})</span>
               <span>{lean.available} indicators available</span>
-              <span>{lean.validation}</span>
+              <span>{weightsModeText(lean)}</span>
             </>
           }
         >
@@ -114,7 +114,9 @@ export function LeanView() {
               {lean.direction}
               {lean.strength !== "none" ? ` · ${lean.strength}` : ""}
             </span>
-            <span className="small muted">score {lean.score.toFixed(2)}; {fmtPct(lean.agreement, 0)} of voting indicators agree</span>
+            <span className="small muted">
+              score {lean.score.toFixed(2)}; {fmtPct(lean.agreement, 0)} of voting indicators agree; {lean.validation}
+            </span>
           </div>
           <ScoreBar score={lean.score} />
           <div className="grid-2">

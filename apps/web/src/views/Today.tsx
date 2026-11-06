@@ -3,15 +3,19 @@ import { api } from "../api/client";
 import { useServer, useServerNow } from "../api/context";
 import { useFetch } from "../lib/useFetch";
 import { ChangesFeed } from "../components/ChangesFeed";
+import { Collapsible } from "../components/Collapsible";
 import { DecisionCard } from "../components/DecisionCard";
 import { LevelsLadder } from "../components/LevelsLadder";
+import { MarketStrip } from "../components/MarketStrip";
 import { Empty, Panel } from "../components/Panel";
 import { PriceChart } from "../components/PriceChart";
 import { RegimePanel } from "../components/RegimePanel";
 import { ModeBadge } from "../components/Badges";
 import { SummaryCard } from "../components/SummaryCard";
-import { LeanStrip } from "../components/LeanStrip";
-import { fmtAgo, fmtPts, fmtTime } from "../lib/format";
+import { fmtAgo, fmtTime } from "../lib/format";
+
+/** Phone width at or below which secondary sections start collapsed. */
+export const PHONE_PX = 640;
 
 export function TodayView() {
   const { state: s, loading } = useServer();
@@ -25,45 +29,58 @@ export function TodayView() {
   }
   const spot = s.spx?.last ?? null;
   const spotTime = s.spx?.quoteTime ?? null;
+  const d = s.decision;
   return (
     <>
-      {s.decision ? (
+      <MarketStrip state={s} />
+      {d ? (
         <>
-          <LeanStrip lean={s.decision.lean} />
-          <SummaryCard summary={s.decision.summary} lean={s.decision.lean} now={now} />
-          <DecisionCard decision={s.decision} now={now} />
+          <SummaryCard summary={d.summary} lean={d.lean} now={now} budgetUsd={s.settings.engine.maxPremiumPerContract} />
+          <DecisionCard decision={d} now={now} />
         </>
       ) : (
         <Empty>
           No decision yet — the engine has not evaluated a frame ({s.mode === "NONE" ? "no market data has arrived" : "waiting for the first evaluation"}). Feeds and the Schwab connection are on the Settings page.
         </Empty>
       )}
-      <div className="grid-2">
-        <RegimePanel regime={s.regime} now={now} />
-        <LevelsLadder levels={s.levels} spot={spot} spotTime={spotTime} />
-      </div>
-      <Panel
-        title="SPX, 1-minute"
+      <Collapsible
+        id="market-detail"
+        title="Market detail"
+        defaultOpen
+        collapseBelowPx={PHONE_PX}
         meta={
-          bars.data ? (
-            <>
-              <span>
-                bars as of {fmtTime(bars.data.stamp.observedAt)} ET ({fmtAgo(now - bars.data.stamp.observedAt)})
-              </span>
-              <ModeBadge mode={bars.data.stamp.mode} />
-              <span>{completed.length} completed bars</span>
-              {spot !== null ? <span>spot {fmtPts(spot, 2)} at {fmtTime(spotTime)}</span> : null}
-            </>
-          ) : bars.error ? (
-            <span>bars unavailable: {bars.error}</span>
-          ) : (
-            <span>loading bars…</span>
-          )
+          <>
+            {s.regime ? <span>regime {s.regime.trend.replace(/-/g, " ")}, gamma {s.regime.gamma}</span> : <span>regime n/a</span>}
+            <span>{s.levels.length} key levels</span>
+          </>
         }
       >
-        <PriceChart bars={completed} levels={s.levels} spot={spot} />
-        <p className="xs muted">Completed bars only (a bar is drawn once its minute has ended on the server clock). Dashed lines are key levels from the ladder; round numbers are omitted.</p>
-      </Panel>
+        <div className="grid-2">
+          <RegimePanel regime={s.regime} now={now} />
+          <LevelsLadder levels={s.levels} spot={spot} spotTime={spotTime} />
+        </div>
+        <Panel
+          title="SPX, 1-minute"
+          meta={
+            bars.data ? (
+              <>
+                <span>
+                  bars as of {fmtTime(bars.data.stamp.observedAt)} ET ({fmtAgo(now - bars.data.stamp.observedAt)})
+                </span>
+                <ModeBadge mode={bars.data.stamp.mode} />
+                <span>{completed.length} completed bars</span>
+              </>
+            ) : bars.error ? (
+              <span>bars unavailable: {bars.error}</span>
+            ) : (
+              <span>loading bars…</span>
+            )
+          }
+        >
+          <PriceChart bars={completed} levels={s.levels} spot={spot} />
+          <p className="xs muted">Completed bars only (a bar is drawn once its minute has ended on the server clock). Dashed lines are key levels from the ladder; round numbers are omitted.</p>
+        </Panel>
+      </Collapsible>
       <ChangesFeed changes={s.changes} />
     </>
   );
