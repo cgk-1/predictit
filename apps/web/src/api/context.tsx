@@ -21,6 +21,15 @@ export function ServerProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** Provides a fixed connection and clock (tests, fixtures). */
+export function StaticServerProvider({ conn, now, children }: { conn: ServerConnection; now: number; children: ReactNode }) {
+  return (
+    <ServerContext.Provider value={conn}>
+      <ClockContext.Provider value={now}>{children}</ClockContext.Provider>
+    </ServerContext.Provider>
+  );
+}
+
 export function useServer(): ServerConnection {
   const c = useContext(ServerContext);
   if (!c) throw new Error("useServer must be used inside ServerProvider");

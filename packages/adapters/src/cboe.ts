@@ -142,7 +142,7 @@ export function parseCboeChain(raw: CboeChainRaw, receivedAt: number, opts: Cboe
       quoteTime: stamp.observedAt,
     });
   }
-  return { underlying, spot, spotTime, options, stamp };
+  return { underlying, spot, spotTime, prevClose: raw.data.prev_day_close || undefined, options, stamp };
 }
 
 /**

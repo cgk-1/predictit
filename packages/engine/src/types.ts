@@ -77,6 +77,8 @@ export interface ChainSnapshot {
   spot: number;
   /** Spot quote time (ms). */
   spotTime: number;
+  /** Vendor-reported prior session close of the underlying, if provided. */
+  prevClose?: number;
   options: OptionQuote[];
   stamp: SourceStamp;
 }
@@ -114,6 +116,8 @@ export interface MarketFrame {
   spyChain?: ChainSnapshot;
   /** Prior-day reference levels (observed before today's open). */
   priorDay?: { date: string; high: number; low: number; close: number; settlementSET?: number };
+  /** Prior close alone (when a full prior-day summary is not available). */
+  priorClose?: number;
   /** Event calendar entries for today (user-entered or static). */
   events?: ScheduledEvent[];
 }

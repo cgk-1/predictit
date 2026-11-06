@@ -67,13 +67,15 @@ export interface PriceChartProps {
   spot: number | null;
 }
 
-export const PriceChart = memo(function PriceChart({ bars, levels, spot }: PriceChartProps) {
+export const PriceChart = memo(function PriceChart({ bars: allBars, levels, spot }: PriceChartProps) {
   const ref = useRef<HTMLDivElement | null>(null);
   const width = useWidth(ref, 720);
   const model = useMemo(() => {
-    if (!bars.length) return null;
+    if (!allBars.length) return null;
+    // the series may carry prior sessions (price history); draw the latest session only
+    const date = etDate(allBars[allBars.length - 1]!.t);
+    const bars = allBars.filter((b) => etDate(b.t) === date);
     const first = bars[0]!;
-    const date = etDate(first.t);
     const open = etToMs(date, 9, 30);
     const close = etToMs(date, 16, 0);
     const lastEnd = bars[bars.length - 1]!.t + 60_000;
@@ -108,8 +110,8 @@ export const PriceChart = memo(function PriceChart({ bars, levels, spot }: Price
     const xTicks: number[] = [];
     for (let t = etToMs(date, 10, 0); t <= x1; t += 30 * 60_000) xTicks.push(t);
     const cw = Math.max(1, Math.min(8, pw / ((x1 - x0) / 60_000) - 1));
-    return { x, y, yTicks, xTicks, cw, lo, hi, shown, pw, ph, x0, x1 };
-  }, [bars, levels, spot, width]);
+    return { x, y, yTicks, xTicks, cw, lo, hi, shown, pw, ph, x0, x1, bars };
+  }, [allBars, levels, spot, width]);
 
   if (!model) {
     return (
@@ -118,7 +120,7 @@ export const PriceChart = memo(function PriceChart({ bars, levels, spot }: Price
       </div>
     );
   }
-  const { x, y, yTicks, xTicks, cw, shown } = model;
+  const { x, y, yTicks, xTicks, cw, shown, bars } = model;
   return (
     <div ref={ref} className="chart">
       <svg viewBox={`0 0 ${width} ${H}`} width={width} height={H} role="img" aria-label="SPX one-minute candles with key levels">

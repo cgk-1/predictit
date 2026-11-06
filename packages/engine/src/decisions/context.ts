@@ -105,7 +105,8 @@ export function buildContext(frame: MarketFrame, settings: EngineSettings = DEFA
     barsMs: frame.spxBars ? asOf - frame.spxBars.stamp.observedAt : null,
   };
   const regime = assessRegime({ clock, spxBars, spyBars, spxChain, gex, events: frame.events ?? [], staleness, mode });
-  const calendar = frame.spxBars ? calendarFeatures(frame.spxBars.bars, asOf, frame.priorDay?.close ?? null) : null;
+  const priorCloseRef = frame.priorDay?.close ?? frame.priorClose ?? frame.spxChain?.prevClose ?? null;
+  const calendar = frame.spxBars ? calendarFeatures(frame.spxBars.bars, asOf, priorCloseRef) : null;
   const levels = keyLevels(frame, spxBars, spyBars, gex, calendar);
   const path = pricePath(frame, asOf);
   const spotForSr = frame.spx?.last ?? spxBars?.last ?? null;
@@ -128,6 +129,8 @@ export function keyLevels(frame: MarketFrame, spx: BarFeatures | null, spy: BarF
     L.push({ level: cal.prior.low, kind: "prior-low", label: "Prior day low", source: `bars ${cal.prior.date}` });
     L.push({ level: cal.prior.close, kind: "prior-close", label: "Prior close", source: `bars ${cal.prior.date}` });
   }
+  const pcOnly = frame.priorClose ?? frame.spxChain?.prevClose;
+  if (!frame.priorDay && !cal?.prior && pcOnly) L.push({ level: pcOnly, kind: "prior-close", label: "Prior close", source: "vendor prev_day_close" });
   if (frame.priorDay) {
     L.push({ level: frame.priorDay.high, kind: "prior-high", label: "Prior day high", source: `bars ${frame.priorDay.date}` });
     L.push({ level: frame.priorDay.low, kind: "prior-low", label: "Prior day low", source: `bars ${frame.priorDay.date}` });

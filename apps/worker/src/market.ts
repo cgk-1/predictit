@@ -132,7 +132,7 @@ function defaultSettings(env: Env): AppSettings {
     events: [],
     maxOpenRiskUsd: 3000,
     pollSec: { live: 5, delayed: 60, idle: 300 },
-    retentionDays: 7,
+    retentionDays: 3,
     archiveCboe: env.ARCHIVE_CBOE === "true",
   };
 }
@@ -204,6 +204,14 @@ export class MarketSession extends DurableObject<Env> {
     this.weights = (await this.ctx.storage.get<EnsembleWeights>("ensembleWeights")) ?? null;
     this.pending = (await this.ctx.storage.get<PendingPrediction[]>("pendingPredictions")) ?? [];
     this.storedCreds = (await this.ctx.storage.get<{ clientId: string; clientSecret: string }>("schwabCreds")) ?? null;
+    const ops = await this.ctx.storage.get<{ ticks: Tick[]; feeds: Record<string, FeedHealth>; lastChainFetch: Record<string, number>; lastHistoryFetch: number; lastPredictionMinute: number }>("ops");
+    if (ops) {
+      this.ticks = ops.ticks ?? [];
+      this.feeds = { ...this.feeds, ...(ops.feeds ?? {}) };
+      this.lastChainFetch = ops.lastChainFetch ?? {};
+      this.lastHistoryFetch = ops.lastHistoryFetch ?? 0;
+      this.lastPredictionMinute = ops.lastPredictionMinute ?? 0;
+    }
     const today = etDate(Date.now());
     const rows = this.sql.exec<{ at: number; kind: string; text: string }>(`SELECT at, kind, text FROM changes WHERE date = ? ORDER BY id DESC LIMIT 100`, today).toArray();
     this.changes = rows.reverse().map((r) => ({ at: r.at, kind: r.kind as ChangeEvent["kind"], text: r.text }));
@@ -213,6 +221,11 @@ export class MarketSession extends DurableObject<Env> {
     for (const kind of SNAP_KINDS) {
       const r = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = ? ORDER BY received_at DESC LIMIT 1`, today, kind).toArray()[0];
       if (r) this.latest[kind] = { receivedAt: r.received_at, payload: JSON.parse(await gunzip(r.body)) };
+    }
+    // rebuild live bar buffers from the latest stored series so quote-built bars continue after a restart
+    for (const [kind, sym] of [["spxBars", "SPX"], ["spyBars", "SPY"]] as const) {
+      const b = this.latest[kind]?.payload as BarSeries | undefined;
+      if (b?.bars.length && (b.stamp.source === "schwab")) this.liveBars.set(sym, [...b.bars]);
     }
   }
 
@@ -335,6 +348,8 @@ export class MarketSession extends DurableObject<Env> {
       await this.ctx.storage.setAlarm(next);
       this.ticks.push({ at: start, durationMs: Date.now() - start, mode: this.lastCtx?.mode ?? "NONE" });
       if (this.ticks.length > 120) this.ticks.shift();
+      // the object may be evicted between alarms: keep operational state in storage
+      await this.ctx.storage.put("ops", { ticks: this.ticks.slice(-30), feeds: this.feeds, lastChainFetch: this.lastChainFetch, lastHistoryFetch: this.lastHistoryFetch, lastPredictionMinute: this.lastPredictionMinute });
     }
   }
 
@@ -452,17 +467,28 @@ export class MarketSession extends DurableObject<Env> {
   private async pollCboe(now: number): Promise<void> {
     const f = this.feeds["cboe-delayed"]!;
     const t0 = Date.now();
-    const s = this.getSettings();
     try {
       const chain = await fetchCboeJson<CboeChainRaw>(CBOE_URLS.spxChain);
       const parsed = parseCboeChain(chain.raw, chain.receivedAt, { maxDays: 95, strikePct: 0.1, today: etDate(now) });
-      await this.storeSnapshot("spxChain", parsed, parsed.stamp.observedAt, chain.receivedAt, "cboe-delayed", "DELAYED", s.archiveCboe);
+      await this.storeSnapshot("spxChain", parsed, parsed.stamp.observedAt, chain.receivedAt, "cboe-delayed", "DELAYED", true);
       const intraday = await fetchCboeJson<CboeIntradayRaw>(CBOE_URLS.spxIntraday);
       const bars = parseCboeIntraday(intraday.raw, intraday.receivedAt);
-      await this.storeSnapshot("spxBars", bars, bars.stamp.observedAt, intraday.receivedAt, "cboe-delayed", "DELAYED", s.archiveCboe);
+      await this.storeSnapshot("spxBars", bars, bars.stamp.observedAt, intraday.receivedAt, "cboe-delayed", "DELAYED", true);
+      try {
+        const spyI = await fetchCboeJson<CboeIntradayRaw>(CBOE_URLS.spyIntraday);
+        const spyBars = parseCboeIntraday(spyI.raw, spyI.receivedAt);
+        if (spyBars.bars.length) {
+          await this.storeSnapshot("spyBars", spyBars, spyBars.stamp.observedAt, spyI.receivedAt, "cboe-delayed", "DELAYED", true);
+          const lastBar = spyBars.bars[spyBars.bars.length - 1]!;
+          const sq: IndexQuote = { symbol: "SPY", last: lastBar.c, quoteTime: lastBar.t + 60_000, volume: lastBar.v, stamp: spyBars.stamp };
+          await this.storeSnapshot("spyQuote", sq, sq.quoteTime, spyI.receivedAt, "cboe-delayed", "DELAYED", false);
+        }
+      } catch {
+        /* SPY intraday is optional */
+      }
       // delayed "quote" = the chain's spot, stamped at its observed time
       const q: IndexQuote = { symbol: "SPX", last: parsed.spot, quoteTime: parsed.spotTime, volume: null, stamp: parsed.stamp };
-      await this.storeSnapshot("spxQuote", q, q.quoteTime, chain.receivedAt, "cboe-delayed", "DELAYED", false);
+      await this.storeSnapshot("spxQuote", q, q.quoteTime, chain.receivedAt, "cboe-delayed", "DELAYED", true);
       f.lastOkAt = Date.now();
       f.lastLatencyMs = Date.now() - t0;
       f.consecutiveErrors = 0;
@@ -474,9 +500,16 @@ export class MarketSession extends DurableObject<Env> {
     }
   }
 
+  private lastPersisted: Record<string, number> = {};
+
   private async storeSnapshot(kind: (typeof SNAP_KINDS)[number], payload: ChainSnapshot | BarSeries | IndexQuote, observedAt: number, receivedAt: number, source: string, mode: string, persist: boolean) {
     this.latest[kind] = { receivedAt, payload };
     if (!persist) return;
+    // bound storage growth: chains/bars at most every 30 s (every tick inside the closing window), quotes every 5 s
+    const clock = sessionClock(receivedAt);
+    const minGap = clock.inClosingWindow ? 0 : kind.endsWith("Chain") || kind.endsWith("Bars") ? 30_000 : 5_000;
+    if (receivedAt - (this.lastPersisted[kind] ?? 0) < minGap) return;
+    this.lastPersisted[kind] = receivedAt;
     // Persist a replay-sized slice of chains (near-money, near-term); the broad chain stays in memory for GEX.
     let toStore: unknown = payload;
     if (kind.endsWith("Chain")) {
@@ -785,7 +818,7 @@ export class MarketSession extends DurableObject<Env> {
         let rows = 0;
         let bytes = 0;
         for (const kind of SNAP_KINDS) {
-          const r = this.sql.exec<{ received_at: number; observed_at: number; source: string; mode: string; body: ArrayBuffer }>(`SELECT received_at, observed_at, source, mode, body FROM snapshots WHERE date = ? AND kind = ? ORDER BY received_at`, d, kind).toArray();
+          const r = this.sql.exec<{ received_at: number; observed_at: number; source: string; mode: string; body: ArrayBuffer }>(`SELECT received_at, observed_at, source, mode, body FROM snapshots WHERE date = ? AND kind = ? ORDER BY received_at`, d, kind).toArray().filter((row) => s.archiveCboe || row.source !== "cboe-delayed");
           if (!r.length) continue;
           const lines: string[] = [];
           for (const row of r) lines.push(JSON.stringify({ receivedAt: row.received_at, observedAt: row.observed_at, source: row.source, mode: row.mode, kind, payload: JSON.parse(await gunzip(row.body)) }));

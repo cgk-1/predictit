@@ -97,8 +97,9 @@ pnpm dev:worker   # wrangler dev on :8787 (serves apps/web/dist when built)
 
 - Health: `GET /api/health` (feed status, last tick, latest snapshot times). The Today view shows feed health and the
   evaluation age; "stale" appears when the server has not evaluated for 30 s.
-- Retention: snapshots are kept in the Durable Object for `retentionDays` (default 7), archived nightly to R2 as
-  JSONL.gz per day and kind, and pruned. Cboe delayed snapshots are archived only when `archiveCboe` is on (default
-  off; Cboe's site terms restrict storage of its delayed data — your call).
+- Retention: snapshots are kept in the Durable Object hot store for `retentionDays` (default 3; chains/bars at most
+  every 30 s, every tick in the closing window) so the in-app Replay and restart recovery work, then archived
+  nightly to R2 as JSONL.gz per day and kind, and pruned. Cboe delayed snapshots are archived to R2 only when
+  `archiveCboe` is on (default off; Cboe's site terms restrict long-term storage of its delayed data — your call).
 - Costs: Workers Paid $5/month; R2 stays in the free tier for months at the default settings.
 - Rotating secrets: re-run `wrangler secret put`; sessions sign with `SESSION_SECRET`, so rotating it logs everyone out.

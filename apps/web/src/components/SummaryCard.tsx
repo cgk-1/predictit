@@ -103,7 +103,7 @@ function SRLadder({ title, levels }: { title: string; levels: SRLevel[] }) {
       ) : (
         <div className="sr" role="table" aria-label={title}>
           {sorted.map((l) => (
-            <div key={`${l.kind}-${l.level}`} className="sr-row" role="row" title={`${l.strengthText}; ${l.touches} touches, ${l.crossings} crossings${l.confluence.length ? `; confluence: ${l.confluence.join(", ")}` : ""}`}>
+            <div key={`${l.kind}-${l.level}`} className="sr-row" role="row" title={l.strengthText}>
               <span className="sr-level">{fmtPts(l.level, 1)}</span>
               <span className="sr-dist">
                 {fmtSignedPts(l.distancePts)} ({fmtSignedPts(l.distancePct * 100, 2)}%)
