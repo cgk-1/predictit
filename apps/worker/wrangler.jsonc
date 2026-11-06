@@ -6,6 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
+  // Preserve variables/secrets that were set in the Cloudflare dashboard across wrangler deploys.
+  "keep_vars": true,
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   // Static SPA assets built by apps/web (pnpm --filter @predictit/web build). The Worker runs first for every
   // request so authentication is enforced on assets, APIs and streams alike.
