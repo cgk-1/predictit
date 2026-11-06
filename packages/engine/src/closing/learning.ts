@@ -179,7 +179,7 @@ export function closingLearnerSummary(st: ClosingLearnerState | null, base: Clos
     rmsZ: s.n ? Math.sqrt(s.sumZ2 / s.n) : null,
     driftSlope: s.sumDriftXX > 0 ? s.sumDriftXY / s.sumDriftXX : null,
     rmsSettlementGapPts: s.gapN ? Math.sqrt(s.gapSq / s.gapN) : null,
-    patterns: Object.fromEntries(Object.entries(s.patterns).map(([k, e]) => [k, { n: e.n, hitRate: e.n ? e.hits / e.n : null, ci: e.n ? [wilson(e.hits, e.n).lo, wilson(e.hits, e.n).hi] : null, trust: s.learned.patternTrust[k] ?? 1 }])),
+    patterns: Object.fromEntries(Object.entries(s.patterns).map(([k, e]) => [k, { n: e.n, hitRate: e.n ? e.hits / e.n : null, ci: e.n ? ([wilson(e.hits, e.n).lo, wilson(e.hits, e.n).hi] as [number, number]) : null, trust: s.learned.patternTrust[k] ?? 1 }])),
     subWindows: Object.fromEntries(Object.entries(s.subWindows).map(([k, e]) => [k, { n: e.n, avgPnlUsd: e.n ? e.pnl / e.n : null, hitRate: e.n ? e.hits / e.n : null }])),
     parameters: { seasonalityMultiplier: applied.seasonalityMultiplier, driftPersistence: applied.driftPersistence, settlementNoisePts: applied.settlementNoisePts, base: { seasonalityMultiplier: base.seasonalityMultiplier, driftPersistence: base.driftPersistence, settlementNoisePts: base.settlementNoisePts } },
     note: s.n < DEFAULT_CLOSING_LEARN.minN ? `Learned parameters apply after ${DEFAULT_CLOSING_LEARN.minN} graded sessions (currently ${s.n}); pattern trust after 20 outcomes per pattern.` : "Parameters adapt within hard bounds from graded sessions; grades are prospective, not validation.",

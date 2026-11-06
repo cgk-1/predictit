@@ -285,10 +285,12 @@ export function ClosingLearning({ g, recent = 30 }: { g: GradesResponse; recent?
                     <td className="mono">{fmtDateTime(r.decidedAt)}</td>
                     <td className="mono">{r.subWindow}</td>
                     <td className="wrap small">
+                      <div className="cell-wrap-sm">
                       {r.recommendation.state}
                       {r.recommendation.strike !== null ? ` ${r.recommendation.strike}${r.recommendation.right ?? ""}` : ""}
                       {r.recommendation.mode ? ` (${r.recommendation.mode})` : ""}
                       {r.recommendation.pattern ? <span className="xs muted"> {r.recommendation.pattern}</span> : null}
+                      </div>
                     </td>
                     <td className="num">{fmtPts(r.settlement, 2)}</td>
                     <td>{r.official ? "yes" : "provisional"}</td>

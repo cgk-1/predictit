@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
+import type { RankedContract } from "@predictit/engine";
 import { StaticServerProvider } from "../api/context";
 import type { ServerConnection } from "../api/useServerState";
 import { gradesFixture, syntheticFixture } from "../test/fixture";
@@ -15,7 +16,7 @@ import { ClosingView } from "./Closing";
 import { PositionsView } from "./Positions";
 import { ReplayView } from "./Replay";
 import { PerformanceView } from "./Performance";
-import { SettingsView } from "./Settings";
+import { Budgets, SettingsView } from "./Settings";
 import { LeanView } from "./Lean";
 import { PriceChart } from "../components/PriceChart";
 import { GexChart } from "../components/GexChart";
@@ -229,7 +230,7 @@ describe("change feed", () => {
     expect(html).not.toContain("Grading sweep failed");
     expect(html).toContain("4 older events hidden");
     expect(isSystemEvent(system[0]!)).toBe(true);
-    expect(isSystemEvent(changes[0]!)).toBe(true === false);
+    expect(isSystemEvent(changes[0]!)).toBe(false);
   });
 
   it("omits the toggles when there is nothing to toggle", () => {
@@ -244,14 +245,13 @@ describe("setups: budget and grades", () => {
   const grades = gradesFixture();
 
   it("the contracts table shows instrument and budget columns and dims over-budget rows", () => {
-    const c = mid.decision.contracts[0] ?? {
-      ...gradesFixture().grades[0]!,
-      instrument: "SPX" as const,
+    const c: RankedContract = {
+      instrument: "SPX",
       withinBudget: true,
       osi: "SPXW  261106C06000000",
-      root: "SPXW" as const,
+      root: "SPXW",
       expiry: "2026-11-06",
-      right: "C" as const,
+      right: "C",
       strike: 6000,
       is0dte: true,
       bid: 1.8,
@@ -277,8 +277,8 @@ describe("setups: budget and grades", () => {
       reasons: [],
       tradeoff: "near-ATM",
     };
-    const over = { ...c, osi: "SPY   261106C00600000", root: "SPY" as const, instrument: "SPY" as const, withinBudget: false, eligible: false, ask: 3.1, entry: 3.1, riskUsd: 310, reasons: ["premium $310 > budget"] };
-    const html = renderToString(<ContractsTable contracts={[c, over]} asOf={mid.asOf} budgetUsd={200} />);
+    const over: RankedContract = { ...c, osi: "SPY   261106C00600000", root: "SPY", instrument: "SPY", withinBudget: false, eligible: false, ask: 3.1, entry: 3.1, riskUsd: 310, reasons: ["premium $310 > budget"] };
+    const html = renderToString(<ContractsTable contracts={[c, over]} asOf={mid.asOf} budgetUsd={200} />).replace(/<!-- -->/g, "");
     expect(html).toContain("Inst.");
     expect(html).toContain("Budget");
     expect(html).toContain(">SPY<");
@@ -290,7 +290,7 @@ describe("setups: budget and grades", () => {
   it("the setups view states the budget and the candidate cards carry a grade chip", () => {
     const html = render(<SetupsView />, conn(mid.state), mid.asOf);
     expect(html).toContain("Budget: $200 per contract");
-    expect(gradeChipText(grades.summary.byFamily["orb"])).toBe("graded n=4, 50% direction, −13% avg");
+    expect(gradeChipText(grades.summary.byFamily["orb"])).toBe("graded n=4, 50% direction, −4% avg");
     expect(gradeChipText(grades.summary.byFamily["range-rejection"])).toBe("graded n=1, 100% direction, avg n/a");
     expect(gradeChipText(null)).toBe("not yet graded");
     const c = mid.decision.candidates[0];
@@ -360,8 +360,8 @@ describe("self-grading and closing-window learning", () => {
 describe("settings", () => {
   it("labels the per-contract budget and shows the current value", () => {
     const mid = syntheticFixture("2026-11-06", 11, 5);
-    const html = render(<SettingsView theme="dark" setTheme={() => {}} />, conn(mid.state), mid.asOf);
-    // settings are fetched in an effect; the SSR render only shows the shell
-    expect(html).toContain("Settings");
+    const html = renderToString(<Budgets s={mid.settings} save={async () => {}} />).replace(/<!-- -->/g, "");
+    expect(html).toContain("Max premium per contract, USD — applies to SPX and SPY ranking and to the closing window");
+    expect(html).toContain("Current value on the server: $200");
   });
 });

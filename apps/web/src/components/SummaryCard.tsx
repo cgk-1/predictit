@@ -60,7 +60,7 @@ export function SummaryCard({ summary, lean, now, budgetUsd }: { summary: CleanS
               }
             />
             <Fact label="Breakeven" value={fmtPts(c.breakeven, 2)} />
-            <Fact label="Entry condition" text value={c.entryCondition} />
+            <Fact label="Entry condition" text value={c.entryCondition} className="fact-span" />
           </div>
         ) : null}
         <div className="facts">
@@ -109,7 +109,7 @@ export function SummaryCard({ summary, lean, now, budgetUsd }: { summary: CleanS
           </div>
         </div>
         <GapCalendarLine summary={summary} />
-        <LeanStrip lean={lean} bare />
+        <LeanStrip lean={lean} bare reasons={0} />
       </div>
     </section>
   );

@@ -43,7 +43,7 @@ function Actions({ onSave, onReset, status, children }: { onSave: () => void; on
   );
 }
 
-function Budgets({ s, save }: { s: AppSettings; save: Saver }) {
+export function Budgets({ s, save }: { s: AppSettings; save: Saver }) {
   const f = useSection({ maxPremiumPerContract: s.engine.maxPremiumPerContract, maxOpenRiskUsd: s.maxOpenRiskUsd, dailyLossLimit: s.engine.dailyLossLimit }, save, (d) => ({ engine: { maxPremiumPerContract: d.maxPremiumPerContract, dailyLossLimit: d.dailyLossLimit }, maxOpenRiskUsd: d.maxOpenRiskUsd }));
   return (
     <Panel title="Budgets">

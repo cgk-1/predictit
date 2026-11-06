@@ -14,9 +14,9 @@ export function Panel({ title, meta, children, className, as: Tag = "section" }:
   );
 }
 
-export function Fact({ label, value, meta, text }: { label: ReactNode; value: ReactNode; meta?: ReactNode; text?: boolean }) {
+export function Fact({ label, value, meta, text, className }: { label: ReactNode; value: ReactNode; meta?: ReactNode; text?: boolean; className?: string }) {
   return (
-    <div className="fact">
+    <div className={`fact${className ? ` ${className}` : ""}`}>
       <span className="fact-label">{label}</span>
       <span className={`fact-value${text ? " fact-value-text" : ""}`}>{value}</span>
       {meta ? <span className="fact-meta">{meta}</span> : null}

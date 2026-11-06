@@ -249,5 +249,7 @@ export function gradesFixture(date = "2026-11-06"): GradesResponse {
     cg.push(g);
     learner = updateClosingLearner(learner, g, DEFAULT_CLOSING_SETTINGS);
   }
-  return { grades, summary: summarizeGrades(grades), closing: { grades: cg, learner: closingLearnerSummary(learner, DEFAULT_CLOSING_SETTINGS) } };
+  // the engine types pattern CIs as number[]; over the wire they are always [lo, hi]
+  const learnerSummary = closingLearnerSummary(learner, DEFAULT_CLOSING_SETTINGS) as GradesResponse["closing"]["learner"];
+  return { grades, summary: summarizeGrades(grades), closing: { grades: cg, learner: learnerSummary } };
 }

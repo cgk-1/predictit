@@ -67,7 +67,7 @@ export function ContractsTable({ contracts, asOf, budgetUsd }: { contracts: Rank
                   {fmtContract(c.osi)}
                   {c.is0dte ? <span className="chip chip-quiet" style={{ marginLeft: 6 }}>0DTE</span> : null}
                 </td>
-                <td className="wrap small">{withinBudget ? <span className="chip chip-ok">within</span> : <span title={budgetReason ?? undefined}>over budget ({budgetReason})</span>}</td>
+                <td className="small">{withinBudget ? <span className="chip chip-ok">within</span> : <span title={budgetReason ?? undefined}>over budget ({budgetReason})</span>}</td>
                 <td className="num">{fmtDelta(c.delta)}</td>
                 <td className="num">
                   {fmtPremium(c.bid)} / {fmtPremium(c.ask)}
@@ -93,21 +93,25 @@ export function ContractsTable({ contracts, asOf, budgetUsd }: { contracts: Rank
                 <td className="num">{fmtRatio(c.rewardRisk)}</td>
                 <td className="num">{fmtPct(c.breakevenWinRate, 0)}</td>
                 <td className="wrap">
-                  {c.eligible ? (
-                    <span className="chip chip-ok">eligible</span>
-                  ) : otherReasons.length ? (
-                    <span className="small" title={otherReasons.join("; ")}>
-                      {otherReasons.join("; ")}
-                    </span>
-                  ) : (
-                    <span className="small muted">over budget only</span>
-                  )}
+                  <div className="cell-wrap-sm">
+                    {c.eligible ? (
+                      <span className="chip chip-ok">eligible</span>
+                    ) : otherReasons.length ? (
+                      <span className="small" title={otherReasons.join("; ")}>
+                        {otherReasons.join("; ")}
+                      </span>
+                    ) : (
+                      <span className="small muted">over budget only</span>
+                    )}
+                  </div>
                 </td>
-                <td className="wrap small">
-                  {c.tradeoff}
-                  <div className="xs muted">
-                    breakeven at expiry {fmtPts(c.breakevenAtExpiry, 2)}
-                    {c.thetaPerMin !== null ? `; theta ${c.thetaPerMin.toFixed(4)}/min` : ""}
+                <td className="wrap wrap-wide small">
+                  <div className="cell-wrap">
+                    {c.tradeoff}
+                    <div className="xs muted">
+                      breakeven at expiry {fmtPts(c.breakevenAtExpiry, 2)}
+                      {c.thetaPerMin !== null ? `; theta ${c.thetaPerMin.toFixed(4)}/min` : ""}
+                    </div>
                   </div>
                 </td>
               </tr>

@@ -3,7 +3,7 @@ import { PHASE_LABEL, type SessionPhase } from "@predictit/engine";
 import { Collapsible } from "./Collapsible";
 import { Countdown } from "./Countdown";
 import { EvidenceList } from "./EvidenceList";
-import { ModeBadge, stateClass } from "./Badges";
+import { stateClass } from "./Badges";
 import { Notes } from "./Notes";
 import { Fact, NA } from "./Panel";
 import { fmtContract, fmtMs, fmtPts, fmtPremium, fmtTime, fmtUsd, fmtDelta } from "../lib/format";
@@ -69,7 +69,6 @@ export function DecisionCard({ decision: d, now, id = "decision-record" }: { dec
           </span>
           <span>decision v{d.version}</span>
           <span>{fmtTime(d.asOf)} ET</span>
-          <ModeBadge mode={d.mode} />
           <span aria-live="polite">
             <Countdown target={d.expiresAt} now={now} />
           </span>
@@ -79,7 +78,7 @@ export function DecisionCard({ decision: d, now, id = "decision-record" }: { dec
       <div className="facts">
         <Fact label="Record id" value={<span style={{ fontSize: "var(--fs-xs)" }}>{d.id}</span>} meta={d.previousId ? `previous ${d.previousId}` : "first record of the day"} />
         <Fact label="Inputs digest" value={d.inputsDigest} meta="hash of the inputs this record was computed from" />
-        <Fact label="Phase" text value={PHASE_LABEL[d.phase as SessionPhase] ?? d.phase} />
+        <Fact label="Phase" text value={`${PHASE_LABEL[d.phase as SessionPhase] ?? d.phase}, ${d.mode} data`} />
         <Fact label="Evaluated" value={fmtTime(d.asOf)} meta={`${fmtMs(Math.max(0, now - d.asOf))} ago`} />
         <Fact label="Expires" value={fmtTime(d.expiresAt)} meta="a new record is written on a material change or at expiry" />
       </div>

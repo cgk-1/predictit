@@ -793,6 +793,12 @@ code {
 .hero-contract .fact-value {
   font-size: var(--fs-lg);
 }
+.hero-contract .fact-span {
+  grid-column: 1 / -1;
+}
+.hero-contract .fact-span .fact-value {
+  font-size: var(--fs-md);
+}
 .lean-row {
   display: flex;
   flex-wrap: wrap;
@@ -877,8 +883,10 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+/* Tables size to their content and scroll inside .table-wrap; they never squeeze wrapping cells to a word per line. */
 .data {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-sm);
   white-space: nowrap;
@@ -920,7 +928,17 @@ code {
 .data td.wrap {
   white-space: normal;
   min-width: 22ch;
-  max-width: 44ch;
+  width: 40ch; /* preferred column width: a cap, since max-width is ignored by auto table layout */
+}
+.data td.wrap-wide {
+  width: 64ch;
+}
+.data td.wrap > .cell-wrap,
+.data td.wrap > .cell-wrap-sm {
+  max-width: 64ch;
+}
+.data td.wrap > .cell-wrap-sm {
+  max-width: 30ch;
 }
 .data tbody tr:last-child td {
   border-bottom: 0;
