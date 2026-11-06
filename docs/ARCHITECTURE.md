@@ -21,15 +21,21 @@ mids and labelled as inferred.
 ## Live loop (Durable Object `MarketSession`)
 
 1. Alarm fires (5 s LIVE / 60 s DELAYED during 08:00–16:35 ET; 5 min otherwise; a 1-minute cron re-arms it).
-2. Fetch: Schwab quotes every tick, SPX chain every 10 s (3 s in the last ten minutes), SPY chain every 30 s, minute
-   history every 5 min; or Cboe delayed SPX chain + intraday bars every 60 s.
-3. Normalize → store gzip snapshots (SQLite, by `receivedAt`) → build the as-of `MarketFrame` → `buildContext`
-   (features, GEX, regime, calendar, levels, S/R) → score due ensemble predictions and update weights (bounded) →
-   `decide` (strategies, ranking, closing window, lean, summary) → append `DecisionRecord` to the insert-only ledger
-   when material → diff → change feed.
+2. Fetch: Schwab quotes every tick (`$SPX, SPY, $TICK, $VIX, $NDX, $RUT, $DJI, QQQ, IWM, RSP`), near SPX and SPY
+   chains every 10 s (3 s in the last ten minutes), broad SPX/SPY chains (±120/±80 strikes, 45 days) every 5 min for
+   GEX, minute history every 5 min; or Cboe delayed SPX chain + intraday bars every 60 s.
+3. Normalize → store gzip snapshots (SQLite, by `receivedAt`; bars at most every 60 s, chains every 30 s, quotes every
+   5 s, everything in the closing window) → build the as-of `MarketFrame` → for each instrument (SPX, then SPY)
+   `buildContext(frame, settings, positions, instrument)` (features, GEX from that instrument's own chain, regime,
+   calendar, levels, S/R, TICK, multi-timeframe, cross-index) → score that instrument's due ensemble predictions and
+   update the shared weights (bounded) → `decide` (strategies, ranking on the native chain only, closing window for SPX
+   only, lean, summary) → append `DecisionRecord` (`dec_<INST>_…`, instrument-tagged) to the insert-only ledger when
+   material → diff → change feed (SPY lines prefixed) → optional Discord alert on a setup change.
 4. Every 60 s a grading sweep scores past recommendations (horizon grades), closing-window records (settlement grades,
    provisional then official) and folds them into the bounded learners (closing parameters, family trust, ensemble weights).
-5. `/api/state` returns the latest evaluation with server time; clients poll every 3 s.
+5. `/api/state` returns the latest evaluation for both instruments (`instruments.SPX`, `instruments.SPY`, compact GEX
+   without per-strike detail) with server time; clients poll every 3 s. `/api/gex?instrument=` serves the per-strike
+   GEX profile; `/api/lean`, `/api/grades`, `/api/replay?instrument=` and `/api/alerts/status` are separate.
 
 ## Decision model
 
@@ -43,6 +49,9 @@ mids and labelled as inferred.
   resale vs hold-to-settlement modes; the final minute always PASSes.
 - Records are immutable and versioned (`previousId`, `inputsDigest`); replay reconstructs any instant from stored
   snapshots received at or before that instant.
+- Instruments are independent: SPX and SPY are analysed from their own data with their own key levels (round-number
+  step 5 for SPY, 50 for SPX; native VWAP for SPY, TWAP for SPX), contracts are ranked only on the native chain, and
+  no price level is ever derived by scaling the other index. The companion index contributes sign agreement only.
 
 ## Leakage guards
 
@@ -53,5 +62,5 @@ availability time and never earlier; settlement in replay is flagged as "last SP
 ## Security
 
 Server-side auth on every path; strict CSP (`script-src 'self'`), no external assets; same-origin enforcement on
-mutating requests; secrets only in Worker secrets or Durable Object storage (write-only); `x-robots-tag: noindex`;
-no secrets in the repo (CI greps for known prefixes).
+mutating requests; secrets only in Worker secrets or Durable Object storage (write-only: Schwab client credentials
+and tokens, the Discord webhook URL); `x-robots-tag: noindex`; no secrets in the repo (CI greps for known prefixes).

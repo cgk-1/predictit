@@ -10,14 +10,15 @@ exists: Schwab connection and credential fixes are done in the app's Settings pa
 |---|---|
 | Worker | `predictit` on `https://predictit.<your-subdomain>.workers.dev` |
 | Auth | Server-enforced on every request: Cloudflare Access JWT (when configured) **or** the fallback passphrase login (HMAC-signed, HttpOnly, SameSite=Strict cookie, rate-limited in a Durable Object). If neither is configured the Worker refuses to serve (HTTP 503). |
-| State | Durable Object `MarketSession` (SQLite): snapshots, decision ledger, positions, change feed, prediction ledger, ensemble weights, Schwab tokens |
+| State | Durable Object `MarketSession` (SQLite): snapshots, decision ledger (SPX and SPY), positions, change feed, prediction ledger, grades, ensemble weights, closing learner, Schwab tokens, Discord webhook (write-only) |
+| Alerts | Tab-title prefix always; per-browser notification and beep; Discord webhook (Settings → Alerts), one line per setup change |
 | Config | KV `predictit-config` (reserved), R2 bucket `predictit-archive` (nightly archive of snapshots and decisions) |
 | Cron | `* * * * *` watchdog that re-arms the poll loop |
-| Data | Schwab Market Data (LIVE) when connected; otherwise Cboe delayed JSON (DELAYED, 15 min). No demo data exists. |
+| Data | Schwab Market Data (LIVE) when connected: SPX, SPY, TICK, VIX, NDX, RUT, DJI, QQQ, IWM, RSP quotes, SPX and SPY chains, minute history; otherwise Cboe delayed JSON (DELAYED, 15 min, SPX only). No demo data exists. |
 
 ## 2. Cloudflare plan
 
-The account is currently on the **Workers Free plan**. The engine's per-tick CPU (parsing a 12 MB chain, GEX across ~10k contracts, ranking) measured ~500 ms. Cloudflare's documented Free-plan limit is 10 ms CPU per invocation; in testing the Durable Object alarm completed at 495 ms CPU with outcome `ok`, i.e. the limit was not hard-enforced, but that is not something to rely on for a market-hours loop. **Recommendation: upgrade to Workers Paid ($5/month)** at `dash.cloudflare.com → Workers & Pages → Plans`, then uncomment `"limits": { "cpu_ms": 30000 }` in `apps/worker/wrangler.jsonc` and redeploy. Paid also raises the Durable Object storage and request limits used by the snapshot store.
+The account is on **Workers Paid** ($5/month) and `apps/worker/wrangler.jsonc` sets `"limits": { "cpu_ms": 30000 }`. A LIVE tick (two chains, GEX across ~10k contracts, two instruments, ranking) measures ~0.4–1 s of CPU; the Free plan's 10 ms limit would not carry a market-hours loop. Paid also raises the Durable Object storage and request limits used by the snapshot store.
 
 ## 3. Deploy from a machine with the repo
 
@@ -99,11 +100,21 @@ pnpm dev:worker   # wrangler dev on :8787 (serves apps/web/dist when built)
 ## 7. Budget and grading defaults
 
 - Per-contract premium budget defaults to **$200** (ask × 100) and applies to SPX and SPY ranking and to the
-  closing-window module; SPY contracts are ranked alongside SPX so cheaper equivalents surface when SPX premiums exceed
-  the budget. Change it in Settings → Budgets.
+  closing-window module. Each instrument is ranked on its own chain: the SPX view only ever recommends SPX/SPXW
+  contracts and the SPY view only SPY contracts (no ratio-scaled equivalents). Change it in Settings → Budgets.
 - Self-grading runs every minute: intraday recommendations are graded at their horizon; closing-window records at the
   close (provisional) and again when the official close is known; the ensemble scores its own predictions. Results are
   on Performance and Lean; nothing is deleted or rewritten.
+
+## 7b. Alerts
+
+- The tab title always carries the current action (`[SPX BUY CALL] predictit`), so a pinned tab shows state at a glance.
+- Settings → Alerts: **Browser notification** (asks for permission once; this browser only, tab must stay open) and
+  **Beep on change** (this browser only). Both are stored in the browser, not on the server.
+- **Discord**: create a webhook in the target channel (Edit channel → Integrations → Webhooks → New webhook → Copy URL)
+  and paste it in Settings → Alerts. The URL is stored in the Durable Object and never returned. A test line is posted
+  on save. One line per setup change per instrument (BUY CALL / BUY PUT / MANAGE starts, and "setup off"), tagged
+  LIVE or DELAYED; WAIT↔PASS flips are never sent. Remove it with the Remove button.
 
 ## 8. Operating notes
 

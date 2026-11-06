@@ -69,16 +69,18 @@ function Banners() {
 }
 
 /** Opt-in alerting on action changes: tab title prefix always; browser Notification and a short beep when enabled. */
-function useAlerts(conn: ServerConnection) {
+function useAlerts(conn: ServerConnection, baseTitle: string) {
   const s = conn.state;
   const action = s?.decision?.summary?.action ?? null;
   const inst = s?.decision?.summary?.instrument ?? "SPX";
   const prev = useRef<string | null>(null);
+  // the title is owned here so a tab change never drops the action prefix
+  useEffect(() => {
+    document.title = action === "BUY CALL" || action === "BUY PUT" || action === "MANAGE" ? `[${inst} ${action}] ${baseTitle}` : baseTitle;
+  }, [action, inst, baseTitle]);
   useEffect(() => {
     if (!action) return;
     const key = `${inst}:${action}`;
-    const base = document.title.replace(/^\[[^\]]+\] /, "");
-    document.title = action === "BUY CALL" || action === "BUY PUT" || action === "MANAGE" ? `[${action}] ${base}` : base;
     if (prev.current !== null && prev.current !== key) {
       let notify = false;
       let beep = false;
@@ -117,14 +119,10 @@ function useAlerts(conn: ServerConnection) {
 function Shell() {
   const path = useRoute();
   const conn = useServer();
-  useAlerts(conn);
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useTheme();
   const view = VIEWS.find((v) => v.path === path) ?? VIEWS[0]!;
-
-  useEffect(() => {
-    document.title = view.path === "/" ? "predictit" : `${view.title} — predictit`;
-  }, [view]);
+  useAlerts(conn, view.path === "/" ? "predictit" : `${view.title} — predictit`);
   useEffect(() => {
     setMenuOpen(false);
   }, [path]);

@@ -24,7 +24,10 @@ replay harness or the prospective paper ledger produces the evidence. Sources wi
 ## 2. Research hypotheses (published or practitioner; not yet tested on our data)
 
 - Dealer-gamma sign conditions intraday momentum (Baltussen et al. 2021): negative gamma → continuation; positive →
-  reversion. Encoded as the `gammaMom` indicator and the afternoon strategy; weight adapts prospectively.
+  reversion. The `gammaMom` indicator votes both ways with a low prior weight. The afternoon strategy family acts
+  only under negative gamma (continuation of the prior-close-anchored move); the positive-gamma reversal half was
+  removed from the family after the quant review because the published effect is weaker and our sign inference for
+  0DTE-heavy days is the least reliable part of the chain (see `naive-ex-0dte`).
 - Naive OI-sign GEX is least reliable for 0DTE (Cboe 2023/2025 flow reports show balanced customer flow); default
   model therefore excludes 0DTE from the signed net (`naive-ex-0dte`) and shows a sensitivity table.
 - Buying 0DTE has negative expected return and a heavy right tail; OTM calls worst; costs dominate retail losses
@@ -35,6 +38,13 @@ replay harness or the prospective paper ledger produces the evidence. Sources wi
 - NYSE TICK as participation: persistently signed 10-minute TICK marks broad participation (continuation); readings
   beyond ±1000 mark exhaustion; price moving without TICK support reverts. Practitioner folklore ([C]); three ensemble
   indicators, the regime's participation label and the momentum-participation family use it; weights adapt prospectively.
+- Cross-index confirmation: agreement of the NDX / RUT / DJI (and QQQ / IWM) 15-minute signs with the analysed index,
+  equal-weight vs cap-weight breadth (RSP vs SPY), small-cap lead and the VIX change feed three ensemble indicators and
+  the regime's participation label when no TICK feed exists. Practitioner evidence only ([C]); low prior weights;
+  signs only — no level is ever derived from another instrument.
+- SPX and SPY are analysed natively, each from its own quote, bars and chain. SPX↔SPY ratio arithmetic is not used
+  anywhere: the two diverge intraday (dividends, ETF premium/discount, 16:00 vs 16:15 trading) and the evidence for one
+  does not transfer to the other. Each instrument has its own decision ledger ids, predictions and grades.
 - Daily calendar effects from our own in-sample study (research/results/daily_calendar_study.md): Monday positive
   2023–2026 (n=181), mild next-day reversion after ±1% days, stronger weeks after down weeks — low prior weights.
 
@@ -48,12 +58,20 @@ without hindsight, and reports results in `research/results/`. None may be calle
 ## 3b. Continuous self-grading (how "unvalidated" turns into evidence)
 
 - Every CALL/PUT SETUP is graded at its horizon (underlying move, invalidation-first exit, the recommended contract's
-  would-have return at the ask/bid with costs); summaries by family with Wilson intervals are shown on Performance.
+  would-have return: entry at the first ask seen ≥ 2 s after the decision plus 0.05 slippage, exit at the bid at or
+  before the exit instant minus slippage; `provisional` while the horizon price is stale); summaries by family with
+  Wilson intervals are shown on Performance. Repeated ticks of the same setup within 5 minutes form one episode, so a
+  setup that persists for 20 ticks counts once, not twenty times.
 - Every closing-window record is graded at settlement, provisionally against the last SPX print and then against the
   official close (the next session's `prev_day_close`); per-pattern hit rates, per-sub-window P&L, σ calibration
   (RMS z), drift persistence and the official-close-vs-last-tick gap feed bounded parameter updates
-  (`packages/engine/src/closing/learning.ts`).
-- The ensemble scores its own directional predictions at 15 and 60 minutes and adapts weights within clamps.
+  (`packages/engine/src/closing/learning.ts`). The learner is rebuilt from one record per session (the record nearest
+  15:56, official grade preferred) so a session with many closing records is still one sample; parameters move only
+  after 30 graded sessions.
+- The ensemble scores its own directional predictions at 15 and 60 minutes (one prediction set per instrument on a
+  5-minute grid) and adapts weights within clamps [0.25×, 3×] of the prior with decay toward the prior; prior weights
+  are used until 600 predictions have been scored; per-family weight caps stop many momentum indicators from acting as
+  one large vote. Brier skill against the session climatology (BSS) is reported on Lean.
 
 ## 4. Out-of-sample findings
 
