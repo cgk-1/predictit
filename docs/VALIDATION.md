@@ -37,6 +37,35 @@ a prospective paper ledger; results accrue from here. The first replay (one part
 - SPX and SPY were both evaluated natively from ~14:00 ET with multi-timeframe frames over 11 sessions of Schwab
   minute history, TICK, VIX and the cross-index set flowing.
 
+## Closing window, first LIVE session (2026-11-06; one session, not evidence)
+
+Source: the deployed ledger (`/api/decisions?date=2026-11-06`, 888 records, 87 with a closing assessment) and the
+provisional closing grades against the last SPX print (7376.51; Cboe had not published the official close when this
+was written, so the official grade and the settlement-gap measurement follow on the next session).
+
+- 40 in-window records (15:50:35–15:59:56), 11 setups: 4 would have finished in the money, 7 not. Held to settlement,
+  the 11 sum to −$619 per contract; the two early 7380 puts (15:50, spot ≈7385, accelerating-toward) and the two
+  late 7380 puts were the winners, the five 7375 put resale setups (15:54–15:57, spot 7375–7378) all finished 1–2
+  points out of the money. Resale exits are not graded yet (needs the option tick path), so these are hold-to-
+  settlement figures for contracts recommended as resales.
+- σ calibration: RMS z = 0.62 over the 40 records (realized remaining moves smaller than the modelled σ); max |z| 1.33.
+  One session: no parameter is moved before 30.
+- Defect found and fixed: between 15:58:19 and 15:58:46 the module alternated 7380 put → 7380 call → 7380 call → 7380
+  put within 27 seconds, each with model P(ITM) 44–53%, because adjacent strikes carried opposite biases and the
+  ranking by P(ITM) picked whichever side a one-point wobble favoured. Fix (engine, tests added): side-margin rule,
+  flip suppression within 90 s, exit band for an active setup, and hold-to-settlement restricted to the pattern
+  strike with P(ITM) ≥ 50%. None of the four 15:58 setups qualifies under the new rules: three had model P(ITM) of
+  44–49%, below the 50% hold floor, and the fourth (53%) was the out-of-the-money neighbour of the pattern strike.
+- Defect found and fixed: decisions were stamped with the tick's start time while the quotes they used arrived up to
+  a second later, so a hindsight-free replay at a record's exact `asOf` saw the previous tick's quote and reproduced 2
+  of 5 sampled closing records. Decisions are now stamped after the fetches. Replay-equals-live is a standing check
+  from the next session on.
+- Intraday (all families): 365 graded episodes, direction hit rate 42%, invalidation rate 40%, median would-have
+  return −0.32% after costs. The engine changed repeatedly during the session (native SPY, grader, σ), so these are
+  pipeline checks, not performance.
+- The sandbox Cboe collector stopped at 12:52 ET (process killed), so the delayed-data closing replay could not be
+  run; the LIVE ledger above is the better source anyway.
+
 ## Continuous self-grading (live, prospective)
 
 - Intraday recommendations: graded at the horizon (direction hit, invalidation-first, would-have return at the ask

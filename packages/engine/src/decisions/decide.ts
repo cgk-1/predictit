@@ -94,6 +94,7 @@ export function decide(i: DecideInputs): DecisionRecord {
       chain: ctx.frame.spxChain ?? null,
       mode: ctx.mode,
       settings: { maxPremiumUsd: ctx.settings.maxPremiumPerContract, costs: { commissionPerContract: ctx.settings.commissionPerContract, feesPerContract: ctx.settings.feesPerContract }, ...(i.closingSettings ?? {}) },
+      previous: previousClosingSetup(i.previous),
     });
   }
 
@@ -220,6 +221,13 @@ export function decide(i: DecideInputs): DecisionRecord {
   };
   const summary = buildSummary(ctx, { ...partial, summary: null as unknown as CleanSummary }, lean, ctx.sr);
   return { ...partial, summary };
+}
+
+/** The previous record's closing setup (direction, strike, time) for the closing module's hysteresis; null when it had none. */
+function previousClosingSetup(prev: DecisionRecord | null): { direction: "call" | "put"; strike: number; asOf: number } | null {
+  const r = prev?.closing?.recommendation;
+  if (!r || !r.direction || r.strike === null) return null;
+  return { direction: r.direction, strike: r.strike, asOf: prev!.asOf };
 }
 
 /** True when a new record should be persisted (material change or expiry of the previous). */

@@ -15,9 +15,10 @@ print. Both facts are encoded and surfaced on the screen.
   pattern label: break-hold, failed-cross, reclaim, rejection, pinning (≥4 crossings in 10 min → "no directional
   edge"), accelerating-toward (speed and ETA vs time left).
 - Approach dynamics: 1-minute and 3-minute speed (pts/min), acceleration, ETA to the strike.
-- Remaining-move distribution: σ = max(ATM 0DTE straddle-implied, realized 10-minute vol × seasonality multiplier)
-  combined with a settlement-noise term (default 1.5 pts, to be measured). Model P(close above strike) uses a drift
-  of half the recent speed over the remaining minutes (momentum hypothesis) — shown with and without the drift.
+- Remaining-move distribution: σ from the ATM 0DTE straddle mid under the normal model (offset-aware, so a spot
+  between strikes does not understate it); when no straddle is quotable, realized 10-minute vol × the seasonality
+  multiplier, combined with a settlement-noise term (default 1.5 pts, to be measured). Model P(close above strike)
+  is driftless by default (`driftPersistence: 0`); the drifted value is shown as a hypothesis only.
 - Quote economics for the call and the put at the strike: bid/ask/size/age, breakeven settlement including costs,
   required move, model P(ITM), expected intrinsic (fair value, Bachelier) vs ask → edge after costs, settlement P&L
   scenarios at −2σ…+2σ.
@@ -36,11 +37,27 @@ practical exit; the settlement-noise term matters).
 missing data; SPX quote older than 5 s; final minute; fewer than 60 s left; and, per contract, wide spread, small
 size, stale quote.
 
-**Recommendation.** The best feasible contract by modelled edge (with drift) relative to its ask among strikes with
-a directional pattern; entry condition, invalidation (SPX back through the strike for >30 s or spread blow-out), exit
-plan, rationale and the strongest counterargument are recorded immutably with a 20-second expiry.
+**Recommendation.** Among strikes with a directional pattern, the feasible contract with the highest model P(ITM)
+(driftless), tighter spread as the tie-break, subject to these gates:
 
-**Status.** Unvalidated. The required prospective measurements (settlement vs 15:59:59 print, last-10-minute
-variance seasonality, strike-magnet hit rate, fill feasibility at 15:58) start accruing once Schwab is connected.
-The research memo found no published study of this window for SPXW 0DTE; the measurement design is in
+- the breakeven must be reachable within 0.75 σ of the remaining move (× learned pattern trust);
+- **side margin**: when the best call-biased and best put-biased candidates differ by less than 10 points of P(ITM),
+  the window has no side and the module WAITs, naming both candidates;
+- **flip suppression**: a direction flip against a setup issued within the last 90 s needs a ≥10-point P(ITM)
+  margin over the old side, otherwise WAIT ("whipsaw guard");
+- **exit band**: a setup already issued on the same strike and side keeps its gate up to 1.0 σ (0.75 × 1.33), so a
+  one-point wobble does not drop and re-issue it every tick;
+- **hold-to-settlement** (15:58 onward, no practical exit): only the option at the pattern strike itself, and only
+  with model P(ITM) ≥ 50%; an out-of-the-money neighbour is never a hold recommendation.
+
+Entry condition, invalidation (SPX back through the strike for >30 s or spread blow-out), exit plan, rationale and
+the strongest counterargument are recorded immutably with a 20-second expiry.
+
+**Status.** Unvalidated. The first LIVE session (2026-11-06, Schwab, 3-second ticks) is written up in
+`docs/VALIDATION.md`; it produced 40 in-window records and 11 setups, exposed a side-flip chatter problem at an
+at-the-money strike in 15:58–15:59 (fixed by the side-margin, flip-suppression and hold rules above) and gave the
+first σ calibration point (RMS z 0.62 against the last print; the official close was not yet published). The
+prospective measurements (settlement vs 15:59:59 print, last-10-minute variance seasonality, strike-magnet hit rate,
+fill feasibility at 15:58) accrue from here; the learner moves parameters only after 30 graded sessions. The research
+memo found no published study of this window for SPXW 0DTE; the measurement design is in
 `docs/research/gex_and_literature.md` §8.

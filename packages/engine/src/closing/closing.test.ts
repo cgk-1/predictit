@@ -133,6 +133,51 @@ describe("closing window assessment", () => {
     expect(a.recommendation.state).toBe("PASS");
   });
 
+  it("does not flip direction within 90 s of a setup unless the new side has a clear P(ITM) margin", () => {
+    const t = at(15, 51);
+    const pts = path([[t - 600_000, 7394], [t - 400_000, 7397], [t - 200_000, 7399], [t - 180_000, 7401.5], [t - 120_000, 7403], [t - 60_000, 7404], [t - 5_000, 7405]]);
+    const inputs = { clock: sessionClock(t), spx: quote(7405, t), spy: null, es: null, path: pts, spyPath: [], esPath: [], chain: chain(7405, t, 2.5), mode: "LIVE" as const, settings: { minEdgePts: -10, maxPremiumUsd: 2000 } };
+    const base = assessClosingWindow(inputs);
+    expect(base.recommendation.state).toBe("CALL SETUP");
+    // a put setup at 7400 issued 30 s ago: the flip to a call is allowed only with a clear P(ITM) margin over the put side
+    const clear = assessClosingWindow({ ...inputs, previous: { direction: "put", strike: 7400, asOf: t - 30_000 } });
+    expect(clear.recommendation.state).toBe("CALL SETUP");
+    // when both sides have candidates and the model cannot separate them, there is no side (conflict rule)
+    const conflict = assessClosingWindow({ ...inputs, settings: { ...inputs.settings, minSideMargin: 1 } });
+    expect(conflict.recommendation.state).toBe("WAIT");
+    expect(conflict.recommendation.rationale.join(" ")).toMatch(/Opposite biases with no clear side/);
+    // spot just through 7405 (no put bias anywhere): a call setup is fine on its own, but a flip against a put setup
+    // issued 30 s ago is suppressed because the old side has no candidate to measure a margin against
+    const pts2 = path([[t - 600_000, 7394], [t - 400_000, 7397], [t - 200_000, 7399], [t - 180_000, 7401.5], [t - 120_000, 7403], [t - 60_000, 7404], [t - 5_000, 7407]]);
+    const inputs2 = { ...inputs, spx: quote(7407, t), path: pts2, chain: chain(7407, t, 2.5) };
+    const base2 = assessClosingWindow(inputs2);
+    expect(base2.ladder.some((r) => r.bias === "put")).toBe(false);
+    expect(base2.recommendation.state).toBe("CALL SETUP");
+    const flipped = assessClosingWindow({ ...inputs2, previous: { direction: "put", strike: 7400, asOf: t - 30_000 } });
+    expect(flipped.recommendation.state).toBe("WAIT");
+    expect(flipped.recommendation.rationale.join(" ")).toMatch(/flipped against the put setup at 7400/);
+    // a setup from well outside the suppression window does not constrain the decision
+    const old = assessClosingWindow({ ...inputs, previous: { direction: "put", strike: 7400, asOf: t - 200_000 } });
+    expect(old.recommendation.state).toBe(base.recommendation.state);
+    // the same side and strike issued moments ago never suppresses (it widens the gate instead)
+    const same = assessClosingWindow({ ...inputs, previous: { direction: "call", strike: 7400, asOf: t - 30_000 } });
+    expect(same.recommendation.state).toBe(base.recommendation.state);
+  });
+
+  it("hold-to-settlement only recommends the option at the pattern strike with P(ITM) ≥ 50%", () => {
+    const t = at(15, 58, 30);
+    const pts = path([[t - 600_000, 7394], [t - 400_000, 7397], [t - 200_000, 7399], [t - 180_000, 7401.5], [t - 120_000, 7402], [t - 60_000, 7402.5], [t - 5_000, 7402]]);
+    const a = assessClosingWindow({ clock: sessionClock(t), spx: quote(7402, t), spy: null, es: null, path: pts, spyPath: [], esPath: [], chain: chain(7402, t, 1.5), mode: "LIVE", settings: { minEdgePts: -10, maxPremiumUsd: 2000 } });
+    expect(a.subWindow).toBe("3:58-3:59");
+    expect(a.recommendation.state).toBe("CALL SETUP");
+    expect(a.recommendation.mode).toBe("hold-to-settlement");
+    const K = a.recommendation.contract!.strike;
+    // the recommended option sits at a strike that itself carries the call bias (in the money), never the OTM neighbour
+    expect(K).toBeLessThanOrEqual(7402);
+    expect(a.ladder.find((r) => r.strike === K)!.bias).toBe("call");
+    expect(a.recommendation.contract!.pItm).toBeGreaterThanOrEqual(0.5);
+  });
+
   it("flags pinning when the strike has been crossed repeatedly", () => {
     const t = at(15, 53);
     const pts: Array<[number, number]> = [];

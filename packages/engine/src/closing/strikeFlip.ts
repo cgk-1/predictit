@@ -47,6 +47,14 @@ export interface ClosingSettings {
   maxPremiumUsd: number;
   /** learned per-pattern trust multipliers (bounded 0.5–1.5) applied to the required edge: edge ≥ minEdgePts / trust */
   patternTrust?: Record<string, number>;
+  /** when the best call-biased and best put-biased candidates differ in model P(ITM) by less than this, the window has no side */
+  minSideMargin: number;
+  /** a direction flip against a setup issued within this many seconds needs ≥ minSideMargin of P(ITM) over the old side */
+  flipSuppressSec: number;
+  /** an active setup (same strike and side within flipSuppressSec) keeps its gate up to maxRequiredSigma × this (exit band) */
+  exitBandMult: number;
+  /** hold-to-settlement is only recommended for the option at the pattern strike itself with model P(ITM) ≥ this */
+  minPItmHold: number;
 }
 
 export const DEFAULT_CLOSING_SETTINGS: ClosingSettings = {
@@ -66,6 +74,10 @@ export const DEFAULT_CLOSING_SETTINGS: ClosingSettings = {
   maxRequiredSigma: 0.75,
   costs: { commissionPerContract: 0.65, feesPerContract: 0.7 },
   maxPremiumUsd: 200,
+  minSideMargin: 0.1,
+  flipSuppressSec: 90,
+  exitBandMult: 1.33,
+  minPItmHold: 0.5,
 };
 
 export interface QuoteEval {
@@ -147,6 +159,8 @@ export interface ClosingInputs {
   chain: ChainSnapshot | null;
   mode: ClosingAssessment["mode"];
   settings?: Partial<ClosingSettings>;
+  /** the previous record's closing setup, for hysteresis (flip suppression and exit band); null when none */
+  previous?: { direction: "call" | "put"; strike: number; asOf: number } | null;
 }
 
 export function subWindowFor(clock: SessionClock): ClosingSubWindow {
@@ -375,6 +389,7 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
     // candidate strikes with a directional bias and confirmation; pick best modelled edge among feasible quotes
     type Cand = { strike: StrikeAnalysis; q: QuoteEval; mode: "resale" | "hold-to-settlement" };
     const cands: Cand[] = [];
+    const prev = i.previous && i.previous.asOf >= asOf - s.flipSuppressSec * 1000 && i.previous.asOf <= asOf ? i.previous : null;
     for (const st of ladder) {
       if (!st.bias) continue;
       // for a call bias consider the call at this strike (ITM if spot>K) and the next strike up (OTM); vice versa for puts
@@ -392,16 +407,38 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
       for (const q of qs) {
         if (q.feasibility.hold !== "ok") continue;
         const mode: Cand["mode"] = q.feasibility.resale === "ok" ? "resale" : "hold-to-settlement";
+        const side = q.right === "C" ? "call" : "put";
+        // an already-issued setup on this strike and side keeps a wider gate (exit band) so a 1-pt wobble does not drop it
+        const active = prev !== null && prev.strike === q.strike && prev.direction === side;
         // gate: the breakeven must be reachable within maxRequiredSigma of the remaining move; the modelled edge is
         // informational (market-consistent σ makes it ≈ 0 by construction) unless a positive threshold is configured
-        if (q.requiredMovePts > s.maxRequiredSigma * sigmaUsedPts * trust) continue;
+        if (q.requiredMovePts > s.maxRequiredSigma * (active ? s.exitBandMult : 1) * sigmaUsedPts * trust) continue;
         if (q.edgeWithDrift < s.minEdgePts / trust) continue;
+        // hold-to-settlement (no practical exit): only the option at the pattern strike itself, and only when the model
+        // puts it in the money at settlement more often than not — an OTM neighbour here is a coin flip after the spread
+        if (mode === "hold-to-settlement" && (q.strike !== st.strike || q.pItm < s.minPItmHold)) continue;
         cands.push({ strike: st, q, mode });
       }
     }
     // rank by model P(ITM) (no drift) then tighter spread
     cands.sort((a, b) => b.q.pItm - a.q.pItm || a.q.spread - b.q.spread);
-    const best = cands[0];
+    const bestCall = cands.find((c) => c.q.right === "C") ?? null;
+    const bestPut = cands.find((c) => c.q.right === "P") ?? null;
+    let best: Cand | undefined = cands[0];
+    const waitNotes: string[] = [];
+    const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
+    if (bestCall && bestPut && Math.abs(bestCall.q.pItm - bestPut.q.pItm) < s.minSideMargin) {
+      // adjacent strikes carry opposite biases and the model cannot separate them: no side, no trade
+      waitNotes.push(`Opposite biases with no clear side: call ${bestCall.q.strike} P(ITM) ${pct(bestCall.q.pItm)} vs put ${bestPut.q.strike} P(ITM) ${pct(bestPut.q.pItm)} (margin < ${pct(s.minSideMargin)}) — no directional edge.`);
+      best = undefined;
+    } else if (best && prev && prev.direction !== (best.q.right === "C" ? "call" : "put")) {
+      // whipsaw guard: a flip against a setup issued moments ago needs a clear P(ITM) margin over the old side
+      const oldSide = prev.direction === "call" ? bestCall : bestPut;
+      if (!oldSide || best.q.pItm - oldSide.q.pItm < s.minSideMargin) {
+        waitNotes.push(`Direction flipped against the ${prev.direction} setup at ${prev.strike} issued ${Math.round((asOf - prev.asOf) / 1000)}s ago; a flip within ${s.flipSuppressSec}s needs a ≥${pct(s.minSideMargin)} P(ITM) margin — waiting.`);
+        best = undefined;
+      }
+    }
     if (best) {
       const dir = best.q.right === "C" ? "call" : "put";
       const K = best.strike.strike;
@@ -436,9 +473,10 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
     } else {
       rec.state = "WAIT";
       rec.rationale = [
-        ladder.some((x) => x.bias) ? `Directional patterns present but no quote clears the edge/feasibility bar (budget $${s.maxPremiumUsd}/contract).` : "No strike shows a break-hold, reclaim, failed cross or acceleration pattern.",
+        ...waitNotes,
+        waitNotes.length ? null : ladder.some((x) => x.bias) ? `Directional patterns present but no quote clears the edge/feasibility bar (budget $${s.maxPremiumUsd}/contract).` : "No strike shows a break-hold, reclaim, failed cross or acceleration pattern.",
         `Remaining 1σ ≈ ${sigmaUsedPts.toFixed(1)} pts; nearest strikes ${ladder.filter((x) => Math.abs(x.distance) <= s.strikeStep).map((x) => x.strike).join(", ")}.`,
-      ];
+      ].filter((x): x is string => x !== null);
     }
   } else {
     rec.rationale = pass;

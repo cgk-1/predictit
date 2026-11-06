@@ -486,7 +486,8 @@ export class MarketSession extends DurableObject<Env> {
       } else {
         await this.maybeArchiveAndPrune(now);
       }
-      await this.evaluate(now);
+      // stamp the decision after the fetches so every input it used was received at or before asOf (replay reproduces it)
+      await this.evaluate(Date.now());
     } finally {
       this.running = false;
     }
