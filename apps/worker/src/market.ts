@@ -43,6 +43,14 @@ import {
   type ScheduledEvent,
   type ClosingSettings,
   type ReplayTrade,
+  initialWeights,
+  makePredictions,
+  scorePredictions,
+  leanStats,
+  DEFAULT_ENSEMBLE_CONFIG,
+  type EnsembleWeights,
+  type PendingPrediction,
+  type ScoredPrediction,
 } from "@predictit/engine";
 import {
   CBOE_URLS,
@@ -85,6 +93,7 @@ export interface FeedHealth {
 
 export interface SchwabStatus {
   configured: boolean;
+  credentialSource: "env" | "settings" | null;
   connected: boolean;
   accessExpiresAt: number | null;
   refreshExpiresAt: number | null;
@@ -147,6 +156,10 @@ export class MarketSession extends DurableObject<Env> {
   private schwabLastError: string | null = null;
   private schwabLastRefreshAt: number | null = null;
   private running = false;
+  private weights: EnsembleWeights | null = null;
+  private pending: PendingPrediction[] = [];
+  private lastPredictionMinute = 0;
+  private storedCreds: { clientId: string; clientSecret: string } | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -182,11 +195,15 @@ export class MarketSession extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS positions (id TEXT PRIMARY KEY, date TEXT NOT NULL, status TEXT NOT NULL, body TEXT NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS archive_log (date TEXT PRIMARY KEY, archived_at INTEGER NOT NULL, rows INTEGER NOT NULL, bytes INTEGER NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS predictions (id TEXT PRIMARY KEY, at INTEGER NOT NULL, date TEXT NOT NULL, horizon_min INTEGER NOT NULL, score REAL NOT NULL, outcome TEXT, hit INTEGER, ret REAL, body TEXT NOT NULL)`);
   }
 
   private async loadState() {
     this.settings = (await this.ctx.storage.get<AppSettings>("settings")) ?? null;
     this.tokens = (await this.ctx.storage.get<SchwabTokens>("schwabTokens")) ?? null;
+    this.weights = (await this.ctx.storage.get<EnsembleWeights>("ensembleWeights")) ?? null;
+    this.pending = (await this.ctx.storage.get<PendingPrediction[]>("pendingPredictions")) ?? [];
+    this.storedCreds = (await this.ctx.storage.get<{ clientId: string; clientSecret: string }>("schwabCreds")) ?? null;
     const today = etDate(Date.now());
     const rows = this.sql.exec<{ at: number; kind: string; text: string }>(`SELECT at, kind, text FROM changes WHERE date = ? ORDER BY id DESC LIMIT 100`, today).toArray();
     this.changes = rows.reverse().map((r) => ({ at: r.at, kind: r.kind as ChangeEvent["kind"], text: r.text }));
@@ -211,11 +228,28 @@ export class MarketSession extends DurableObject<Env> {
   }
 
   // ---------- Schwab ----------
+  private creds(): { clientId: string; clientSecret: string } | null {
+    if (this.env.SCHWAB_CLIENT_ID && this.env.SCHWAB_CLIENT_SECRET) return { clientId: this.env.SCHWAB_CLIENT_ID, clientSecret: this.env.SCHWAB_CLIENT_SECRET };
+    return this.storedCreds;
+  }
+
+  /** Write-only: credentials entered in Settings are stored in Durable Object storage and never returned. */
+  async setSchwabCredentials(clientId: string, clientSecret: string): Promise<SchwabStatus> {
+    const id = clientId.trim();
+    const sec = clientSecret.trim();
+    if (id.length < 8 || sec.length < 8) throw new Error("client id/secret look too short");
+    this.storedCreds = { clientId: id, clientSecret: sec };
+    await this.ctx.storage.put("schwabCreds", this.storedCreds);
+    this.schwabLastError = null;
+    return this.schwabStatus();
+  }
+
   schwabStatus(): SchwabStatus {
     const t = this.tokens ?? null;
     const now = Date.now();
     return {
-      configured: !!(this.env.SCHWAB_CLIENT_ID && this.env.SCHWAB_CLIENT_SECRET),
+      configured: !!this.creds(),
+      credentialSource: this.env.SCHWAB_CLIENT_ID && this.env.SCHWAB_CLIENT_SECRET ? "env" : this.storedCreds ? "settings" : null,
       connected: !!t && t.refreshExpiresAt > now,
       accessExpiresAt: t?.accessExpiresAt ?? null,
       refreshExpiresAt: t?.refreshExpiresAt ?? null,
@@ -225,14 +259,16 @@ export class MarketSession extends DurableObject<Env> {
   }
 
   schwabAuthUrl(): string {
-    if (!this.env.SCHWAB_CLIENT_ID) throw new Error("SCHWAB_CLIENT_ID not configured");
-    return buildAuthorizeUrl(this.env.SCHWAB_CLIENT_ID, this.env.SCHWAB_REDIRECT_URI);
+    const c = this.creds();
+    if (!c) throw new Error("Schwab client credentials not configured (set them in Settings)");
+    return buildAuthorizeUrl(c.clientId, this.env.SCHWAB_REDIRECT_URI);
   }
 
   async schwabCallback(redirectedUrl: string): Promise<SchwabStatus> {
-    if (!this.env.SCHWAB_CLIENT_ID || !this.env.SCHWAB_CLIENT_SECRET) throw new Error("Schwab client credentials not configured");
+    const c = this.creds();
+    if (!c) throw new Error("Schwab client credentials not configured");
     const code = extractCodeFromRedirect(redirectedUrl);
-    const t = await exchangeAuthCode(code, this.env.SCHWAB_CLIENT_ID, this.env.SCHWAB_CLIENT_SECRET, this.env.SCHWAB_REDIRECT_URI);
+    const t = await exchangeAuthCode(code, c.clientId, c.clientSecret, this.env.SCHWAB_REDIRECT_URI);
     this.tokens = t;
     this.schwabLastError = null;
     this.schwabLastRefreshAt = Date.now();
@@ -256,7 +292,9 @@ export class MarketSession extends DurableObject<Env> {
     }
     if (t.accessExpiresAt > now + 15_000) return t.access_token;
     try {
-      const nt = await refreshTokens(t, this.env.SCHWAB_CLIENT_ID!, this.env.SCHWAB_CLIENT_SECRET!);
+      const c = this.creds();
+      if (!c) throw new Error("credentials missing");
+      const nt = await refreshTokens(t, c.clientId, c.clientSecret);
       this.tokens = nt;
       this.schwabLastRefreshAt = now;
       this.schwabLastError = null;
@@ -439,7 +477,14 @@ export class MarketSession extends DurableObject<Env> {
   private async storeSnapshot(kind: (typeof SNAP_KINDS)[number], payload: ChainSnapshot | BarSeries | IndexQuote, observedAt: number, receivedAt: number, source: string, mode: string, persist: boolean) {
     this.latest[kind] = { receivedAt, payload };
     if (!persist) return;
-    const body = await gzip(JSON.stringify(payload));
+    // Persist a replay-sized slice of chains (near-money, near-term); the broad chain stays in memory for GEX.
+    let toStore: unknown = payload;
+    if (kind.endsWith("Chain")) {
+      const c = payload as ChainSnapshot;
+      const lim = Date.parse(etDate(observedAt)) + 14 * 86400000;
+      toStore = { ...c, options: c.options.filter((o) => Math.abs(o.strike / c.spot - 1) <= 0.05 && Date.parse(o.expiry) <= lim) };
+    }
+    const body = await gzip(JSON.stringify(toStore));
     this.sql.exec(`INSERT INTO snapshots (received_at, observed_at, date, kind, source, mode, body) VALUES (?,?,?,?,?,?,?)`, receivedAt, observedAt, etDate(receivedAt), kind, source, mode, body);
   }
 
@@ -474,7 +519,31 @@ export class MarketSession extends DurableObject<Env> {
     const settings = this.getSettings().engine;
     const ctx = buildContext(frame, settings, positions);
     const realizedToday = this.realizedToday(ctx.today);
-    const rec = decide({ ctx, positions, previous: this.lastDecision, realizedToday });
+    // score due predictions first (uses only the as-of price path), then decide with the updated weights
+    const weights0 = this.weights ?? initialWeights(now);
+    const scoredRes = scorePredictions(this.pending, ctx.spxPath, now, weights0, DEFAULT_ENSEMBLE_CONFIG);
+    if (scoredRes.scored.length || scoredRes.pending.length !== this.pending.length) {
+      for (const sp of scoredRes.scored) this.sql.exec(`INSERT OR REPLACE INTO predictions (id, at, date, horizon_min, score, outcome, hit, ret, body) VALUES (?,?,?,?,?,?,?,?,?)`, sp.id, sp.at, etDate(sp.at), sp.horizonMin, sp.score, sp.outcome, sp.hit === null ? null : sp.hit ? 1 : 0, sp.ret, JSON.stringify(sp));
+      this.pending = scoredRes.pending;
+      await this.ctx.storage.put("pendingPredictions", this.pending);
+    }
+    if (scoredRes.scored.length) {
+      this.weights = scoredRes.weights;
+      await this.ctx.storage.put("ensembleWeights", this.weights);
+    } else if (!this.weights) {
+      this.weights = weights0;
+      await this.ctx.storage.put("ensembleWeights", this.weights);
+    }
+    const rec = decide({ ctx, positions, previous: this.lastDecision, realizedToday, weights: this.weights });
+    // one prediction set per minute during the regular session
+    const minute = Math.floor(now / 60_000);
+    if (ctx.clock.isRegularSession && minute !== this.lastPredictionMinute && ctx.frame.spx && ctx.mode !== "NONE") {
+      const preds = makePredictions(rec.lean, ctx.frame.spx.last).filter((p) => p.dueAt <= ctx.clock.session.closeMs + 60_000);
+      this.pending.push(...preds);
+      this.lastPredictionMinute = minute;
+      for (const p of preds) this.sql.exec(`INSERT OR IGNORE INTO predictions (id, at, date, horizon_min, score, outcome, hit, ret, body) VALUES (?,?,?,?,?,?,?,?,?)`, p.id, p.at, etDate(p.at), p.horizonMin, p.score, null, null, null, JSON.stringify(p));
+      await this.ctx.storage.put("pendingPredictions", this.pending);
+    }
     // position bookkeeping: update high bids and persist
     for (const p of positions) {
       const m = rec.positions.find((x) => x.id === p.id);
@@ -570,8 +639,16 @@ export class MarketSession extends DurableObject<Env> {
   }
 
   // ---------- read API ----------
-  state() {
+  async state() {
     const now = Date.now();
+    // after a restart/redeploy the in-memory evaluation is gone: rebuild it from the reloaded snapshots on demand
+    if (!this.lastEval && Object.keys(this.latest).length && !this.running) {
+      try {
+        await this.evaluate(now);
+      } catch (e) {
+        this.recordChange({ at: now, kind: "data", text: `On-demand evaluation failed: ${(e as Error).message}` });
+      }
+    }
     const ev = this.lastEval;
     const frame = this.currentFrame(now);
     const spxChain = frame.spxChain;
@@ -604,6 +681,12 @@ export class MarketSession extends DurableObject<Env> {
       notes: ctx?.notes ?? [],
       evaluatedAt: ev?.at ?? null,
     };
+  }
+
+  lean(): { stats: ReturnType<typeof leanStats>; weights: EnsembleWeights; pending: number; recent: ScoredPrediction[]; config: typeof DEFAULT_ENSEMBLE_CONFIG } {
+    const w = this.weights ?? initialWeights(Date.now());
+    const recent = this.sql.exec<{ body: string }>(`SELECT body FROM predictions WHERE outcome IS NOT NULL ORDER BY at DESC LIMIT 100`).toArray().map((r) => JSON.parse(r.body) as ScoredPrediction);
+    return { stats: leanStats(w), weights: w, pending: this.pending.length, recent, config: DEFAULT_ENSEMBLE_CONFIG };
   }
 
   bars(symbol: "SPX" | "SPY"): BarSeries | null {

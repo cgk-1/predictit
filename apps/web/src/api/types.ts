@@ -23,7 +23,13 @@ import type {
   ChainSnapshot,
   ReplayTrade,
   PerformanceReport,
+  LeanStats,
+  EnsembleWeights,
+  ScoredPrediction,
+  EnsembleConfig,
 } from "@predictit/engine";
+
+export interface LeanResponse { stats: LeanStats; weights: EnsembleWeights; pending: number; recent: ScoredPrediction[]; config: EnsembleConfig }
 
 export interface FeedHealth {
   source: "schwab" | "cboe-delayed";
@@ -36,6 +42,7 @@ export interface FeedHealth {
 
 export interface SchwabStatus {
   configured: boolean;
+  credentialSource: "env" | "settings" | null;
   connected: boolean;
   accessExpiresAt: number | null;
   refreshExpiresAt: number | null;
@@ -106,7 +113,9 @@ export type ChainResponse = ChainSnapshot | null;
  *  POST /api/positions                  { osi, qty, entryPremium, entryAt?, note?, invalidationLevel?, horizonMinutes?, profitTargetPremium?, trail?, mode?, decisionId?, strategyId? } → PaperPosition
  *  POST /api/positions/:id/close        { premium, reason? } → PaperPosition
  *  GET  /api/settings / PUT /api/settings (partial AppSettings) → AppSettings
+ *  GET  /api/lean                       → { stats: LeanStats, weights: EnsembleWeights, pending: number, recent: ScoredPrediction[], config }
  *  GET  /api/schwab/status → SchwabStatus; GET /api/schwab/auth-url → { url, redirectUri }
+ *  POST /api/schwab/credentials { clientId, clientSecret } → SchwabStatus (write-only; never echoed back)
  *  POST /api/schwab/callback { redirectedUrl } → SchwabStatus; POST /api/schwab/disconnect
  *  POST /api/explain { decisionId } → { text, model?, disabled? }
  *  POST /api/auth/login { passphrase } ; POST /api/auth/logout ; GET /api/auth/me → { sub } ; GET /api/auth/config

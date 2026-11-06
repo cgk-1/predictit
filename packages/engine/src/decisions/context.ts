@@ -8,11 +8,13 @@ import { chainFeatures, type ChainFeatures } from "../features/chain";
 import { gexSummary, type GexConfig, type GexSummary, DEFAULT_GEX_CONFIG } from "../gex/gex";
 import { assessRegime, type RegimeAssessment } from "../regime/regime";
 import type { PricePoint } from "../features/levels";
+import { calendarFeatures, type CalendarFeatures } from "../features/calendar";
+import { supportResistance, type SRLevel } from "../features/sr";
 import { etDate } from "../time/et";
 
 export interface KeyLevel {
   level: number;
-  kind: "prior-high" | "prior-low" | "prior-close" | "or-high" | "or-low" | "session-high" | "session-low" | "vwap" | "twap" | "gex-flip" | "call-wall" | "put-wall" | "round" | "largest-gex";
+  kind: "prior-high" | "prior-low" | "prior-close" | "or-high" | "or-low" | "session-high" | "session-low" | "vwap" | "twap" | "gex-flip" | "call-wall" | "put-wall" | "round" | "largest-gex" | "gap-fill" | "prior-week-high" | "prior-week-low" | "high-oi-strike";
   label: string;
   source: string;
 }
@@ -64,6 +66,8 @@ export interface EngineContext {
   gex: GexSummary | null;
   regime: RegimeAssessment;
   levels: KeyLevel[];
+  calendar: CalendarFeatures | null;
+  sr: { support: SRLevel[]; resistance: SRLevel[] };
   staleness: { spxMs: number | null; chainMs: number | null; barsMs: number | null };
   notes: DataQualityNote[];
   positions: PaperPositionLike[];
@@ -101,14 +105,29 @@ export function buildContext(frame: MarketFrame, settings: EngineSettings = DEFA
     barsMs: frame.spxBars ? asOf - frame.spxBars.stamp.observedAt : null,
   };
   const regime = assessRegime({ clock, spxBars, spyBars, spxChain, gex, events: frame.events ?? [], staleness, mode });
-  const levels = keyLevels(frame, spxBars, spyBars, gex);
+  const calendar = frame.spxBars ? calendarFeatures(frame.spxBars.bars, asOf, frame.priorDay?.close ?? null) : null;
+  const levels = keyLevels(frame, spxBars, spyBars, gex, calendar);
+  const path = pricePath(frame, asOf);
+  const spotForSr = frame.spx?.last ?? spxBars?.last ?? null;
+  const sr = spotForSr ? supportResistance(levels, spotForSr, path, asOf) : { support: [], resistance: [] };
   if (!frame.spxChain) notes.push({ level: "warn", message: "No SPX option chain in this frame." });
   if (!frame.spxBars) notes.push({ level: "warn", message: "No SPX 1-minute bars in this frame." });
-  return { asOf, today, clock, frame, settings, mode, spxBars, spyBars, spxPath: pricePath(frame, asOf), spxChain, gex, regime, levels, staleness, notes: [...notes, ...regime.notes, ...(spxChain?.notes ?? []), ...(gex?.notes ?? [])], positions };
+  if (calendar && calendar.coverageDays < 2) notes.push({ level: "info", message: "Only today's bars available: prior-day, gap and weekly features are n/a until multi-day history is loaded (Schwab price history)." });
+  return { asOf, today, clock, frame, settings, mode, spxBars, spyBars, spxPath: path, spxChain, gex, regime, levels, calendar, sr, staleness, notes: [...notes, ...regime.notes, ...(spxChain?.notes ?? []), ...(gex?.notes ?? [])], positions };
 }
 
-export function keyLevels(frame: MarketFrame, spx: BarFeatures | null, spy: BarFeatures | null, gex: GexSummary | null): KeyLevel[] {
+export function keyLevels(frame: MarketFrame, spx: BarFeatures | null, spy: BarFeatures | null, gex: GexSummary | null, cal: CalendarFeatures | null = null): KeyLevel[] {
   const L: KeyLevel[] = [];
+  if (cal?.priorWeek) {
+    if (cal.priorWeek.high) L.push({ level: cal.priorWeek.high, kind: "prior-week-high", label: "Prior week high", source: "SPX bars" });
+    if (cal.priorWeek.low) L.push({ level: cal.priorWeek.low, kind: "prior-week-low", label: "Prior week low", source: "SPX bars" });
+  }
+  if (cal?.today.gapFillLevel && cal.today.gapFilled === false) L.push({ level: cal.today.gapFillLevel, kind: "gap-fill", label: `Gap fill (${cal.today.gapPts! > 0 ? "gap up" : "gap down"} ${cal.today.gapPts!.toFixed(1)} pts)`, source: "prior close" });
+  if (!frame.priorDay && cal?.prior) {
+    L.push({ level: cal.prior.high, kind: "prior-high", label: "Prior day high", source: `bars ${cal.prior.date}` });
+    L.push({ level: cal.prior.low, kind: "prior-low", label: "Prior day low", source: `bars ${cal.prior.date}` });
+    L.push({ level: cal.prior.close, kind: "prior-close", label: "Prior close", source: `bars ${cal.prior.date}` });
+  }
   if (frame.priorDay) {
     L.push({ level: frame.priorDay.high, kind: "prior-high", label: "Prior day high", source: `bars ${frame.priorDay.date}` });
     L.push({ level: frame.priorDay.low, kind: "prior-low", label: "Prior day low", source: `bars ${frame.priorDay.date}` });
@@ -131,6 +150,9 @@ export function keyLevels(frame: MarketFrame, spx: BarFeatures | null, spy: BarF
     if (gex.walls.callWall) L.push({ level: gex.walls.callWall, kind: "call-wall", label: "Call wall (largest call gamma above)", source: "GEX" });
     if (gex.walls.putWall) L.push({ level: gex.walls.putWall, kind: "put-wall", label: "Put wall (largest put gamma below)", source: "GEX" });
     if (gex.walls.largest0dte) L.push({ level: gex.walls.largest0dte, kind: "largest-gex", label: "Largest 0DTE gamma strike", source: "GEX 0DTE" });
+    // two highest-OI strikes within ±1.5% of spot (either side), excluding ones already listed
+    const near = gex.byStrike.filter((r) => Math.abs(r.strike / gex.spot - 1) <= 0.015).sort((a, b) => b.callOi + b.putOi - (a.callOi + a.putOi)).slice(0, 2);
+    for (const r of near) if (!L.some((l) => l.level === r.strike)) L.push({ level: r.strike, kind: "high-oi-strike", label: `High-OI strike (${Math.round((r.callOi + r.putOi) / 1000)}k)`, source: "chain OI (prior close)" });
   }
   if (frame.spx) {
     const r = Math.round(frame.spx.last / 50) * 50;

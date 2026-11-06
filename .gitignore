@@ -16,6 +16,7 @@ env.sh
 *.key
 # local research data (large; collected separately)
 research/data/
+!research/data/SPX_History_cboe_2026-11-06.csv
 research/results/raw/
 coverage/
 .vite/

@@ -1,0 +1,24 @@
+name: ci
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm --filter @predictit/web build
+      - name: Secret scan (basic)
+        run: |
+          ! grep -rIE --exclude-dir=node_modules --exclude-dir=.git "(cfut_|sbp_|rk_live_|github_pat_|whsec_|sk-ant-)" .

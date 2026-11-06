@@ -1,0 +1,15 @@
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
+import { parseCboeChain } from "@predictit/adapters";
+const f = process.argv[2]!;
+const text = gunzipSync(readFileSync(f)).toString("utf8");
+global.gc?.();
+const m0 = process.memoryUsage().heapUsed;
+const t0 = performance.now();
+const raw = JSON.parse(text);
+const t1 = performance.now();
+const m1 = process.memoryUsage().heapUsed;
+const chain = parseCboeChain(raw, Date.now(), { maxDays: 95, strikePct: 0.1 });
+const t2 = performance.now();
+const m2 = process.memoryUsage().heapUsed;
+console.log(`json ${(text.length / 1e6).toFixed(1)} MB; parse ${(t1 - t0).toFixed(0)} ms, heap +${((m1 - m0) / 1e6).toFixed(0)} MB; normalize ${(t2 - t1).toFixed(0)} ms, +${((m2 - m1) / 1e6).toFixed(0)} MB; options kept ${chain.options.length}; normalized JSON ${(JSON.stringify(chain).length / 1e6).toFixed(2)} MB`);

@@ -62,7 +62,7 @@ describe("authenticate", () => {
     expect(r2.ok).toBe(true);
   });
   it("verifies a Cloudflare Access JWT against the team JWKS (aud, iss, email, signature, exp)", async () => {
-    const kp = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const kp = (await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"])) as CryptoKeyPair;
     const jwk = (await crypto.subtle.exportKey("jwk", kp.publicKey)) as JsonWebKey;
     const team = "team.cloudflareaccess.com";
     const realFetch = globalThis.fetch;

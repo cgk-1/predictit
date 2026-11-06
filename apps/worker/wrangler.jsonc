@@ -5,6 +5,7 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  "preview_urls": false,
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   // Static SPA assets built by apps/web (pnpm --filter @predictit/web build). The Worker runs first for every
   // request so authentication is enforced on assets, APIs and streams alike.
@@ -21,10 +22,10 @@
     ]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MarketSession", "Gatekeeper"] }],
-  "kv_namespaces": [{ "binding": "CONFIG", "id": "REPLACE_WITH_KV_ID" }],
+  "kv_namespaces": [{ "binding": "CONFIG", "id": "b855ea9a556d414c91c3470275b20b2f" }],
   "r2_buckets": [{ "binding": "ARCHIVE", "bucket_name": "predictit-archive" }],
   "triggers": { "crons": ["* * * * *"] },
-  "limits": { "cpu_ms": 30000 },
+  // "limits": { "cpu_ms": 30000 },  // requires Workers Paid; the Free plan caps CPU at 10 ms per invocation (see docs/SETUP.md)
   "vars": {
     "APP_NAME": "predictit",
     // Cloudflare Access (optional). When ACCESS_AUD is set, every request must carry a valid Cf-Access-Jwt-Assertion.

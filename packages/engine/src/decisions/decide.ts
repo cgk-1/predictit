@@ -12,6 +12,8 @@ import { rankContracts, type RankedContract, type RankingResult } from "../ranki
 import { assessClosingWindow, type ClosingAssessment } from "../closing/strikeFlip";
 import { markPosition, type PaperPosition, type PositionMark } from "../positions/positions";
 import { fmtEtTime } from "../time/et";
+import { computeLean, initialWeights, type EnsembleWeights, type LeanResult } from "../lean/ensemble";
+import { buildSummary, type CleanSummary } from "./summary";
 
 export interface DecisionRecord {
   id: string;
@@ -37,6 +39,10 @@ export interface DecisionRecord {
   dataNotes: DataQualityNote[];
   positions: PositionMark[];
   closing: ClosingAssessment | null;
+  /** transparent indicator ensemble (directional lean) */
+  lean: LeanResult;
+  /** the clean answer composed from recorded outputs */
+  summary: CleanSummary;
   /** hash of key inputs so a later viewer can prove what the record was based on */
   inputsDigest: string;
 }
@@ -46,6 +52,7 @@ export interface DecideInputs {
   positions: PaperPosition[];
   previous: DecisionRecord | null;
   realizedToday: number;
+  weights?: EnsembleWeights;
 }
 
 function digest(parts: Array<string | number | null | undefined>): string {
@@ -172,7 +179,8 @@ export function decide(i: DecideInputs): DecisionRecord {
   const version = (i.previous?.version ?? 0) + 1;
   const inputsDigest = digest([asOf, ctx.frame.spx?.last, ctx.frame.spx?.quoteTime, ctx.frame.spxChain?.stamp.observedAt, ctx.frame.spxBars?.stamp.observedAt, state, primary?.id, contracts[0]?.osi, closing?.recommendation.contract?.osi]);
   const ttl = ctx.clock.inClosingWindow ? 20_000 : primary ? Math.min(primary.expiresAt - asOf, 5 * 60_000) : 60_000;
-  return {
+  const lean = computeLean(ctx, ctx.calendar, i.weights ?? initialWeights(asOf));
+  const partial = {
     id: `dec_${ctx.today}_${asOf}_${inputsDigest}`,
     version,
     previousId: prevId,
@@ -196,8 +204,11 @@ export function decide(i: DecideInputs): DecisionRecord {
     dataNotes,
     positions: marks,
     closing,
+    lean,
     inputsDigest,
   };
+  const summary = buildSummary(ctx, { ...partial, summary: null as unknown as CleanSummary }, lean, ctx.sr);
+  return { ...partial, summary };
 }
 
 /** True when a new record should be persisted (material change or expiry of the previous). */
@@ -210,6 +221,7 @@ export function shouldPersist(prev: DecisionRecord | null, next: DecisionRecord)
   if ((prev.contracts[0]?.osi ?? null) !== (next.contracts[0]?.osi ?? null)) return true;
   if ((prev.closing?.recommendation.contract?.osi ?? null) !== (next.closing?.recommendation.contract?.osi ?? null)) return true;
   if (prev.mode !== next.mode) return true;
+  if (prev.lean.direction !== next.lean.direction) return true;
   return false;
 }
 
@@ -258,5 +270,6 @@ export function diffDecisions(prev: DecisionRecord | null, next: DecisionRecord,
   }
   for (const m of next.positions) if (m.exitSignal && !prev.positions.find((p) => p.id === m.id)?.exitSignal) ev.push({ at, kind: "position", text: `${t} ${m.exitSignal.reason}` });
   if (next.closing && prev.closing && next.closing.recommendation.state !== prev.closing.recommendation.state) ev.push({ at, kind: "closing", text: `${t} Closing window: ${prev.closing.recommendation.state} → ${next.closing.recommendation.state}.` });
+  if (prev.lean.direction !== next.lean.direction) ev.push({ at, kind: "regime", text: `${t} Market lean: ${prev.lean.direction} → ${next.lean.direction} (${next.lean.strength}).` });
   return ev;
 }

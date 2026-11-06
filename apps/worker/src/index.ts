@@ -102,7 +102,12 @@ async function handleApi(req: Request, env: Env, url: URL, sub: string): Promise
     }
     if (p === "/settings" && req.method === "GET") return json(await m.getSettings());
     if (p === "/settings" && req.method === "PUT") return json(await m.putSettings((await req.json()) as any));
+    if (p === "/lean") return json(await m.lean());
     if (p === "/schwab/status") return json(await m.schwabStatus());
+    if (p === "/schwab/credentials" && req.method === "POST") {
+      const body = (await req.json()) as { clientId: string; clientSecret: string };
+      return json(await m.setSchwabCredentials(String(body.clientId ?? ""), String(body.clientSecret ?? "")));
+    }
     if (p === "/schwab/auth-url") return json({ url: await m.schwabAuthUrl(), redirectUri: env.SCHWAB_REDIRECT_URI });
     if (p === "/schwab/callback" && req.method === "POST") {
       const body = (await req.json()) as { redirectedUrl: string };
