@@ -221,7 +221,7 @@ export function shouldPersist(prev: DecisionRecord | null, next: DecisionRecord)
   if ((prev.contracts[0]?.osi ?? null) !== (next.contracts[0]?.osi ?? null)) return true;
   if ((prev.closing?.recommendation.contract?.osi ?? null) !== (next.closing?.recommendation.contract?.osi ?? null)) return true;
   if (prev.mode !== next.mode) return true;
-  if (prev.lean.direction !== next.lean.direction) return true;
+  if ((prev.lean?.direction ?? null) !== next.lean.direction) return true;
   return false;
 }
 
@@ -241,13 +241,13 @@ export function diffDecisions(prev: DecisionRecord | null, next: DecisionRecord,
     return ev;
   }
   if (prev.state !== next.state) ev.push({ at, kind: "state", text: `${t} ${prev.state} → ${next.state}.` });
-  const prevIds = new Map(prev.candidates.map((c) => [c.id, c.lifecycle]));
+  const prevIds = new Map((prev.candidates ?? []).map((c) => [c.id, c.lifecycle]));
   for (const c of next.candidates) {
     const was = prevIds.get(c.id);
     if (!was) ev.push({ at, kind: "setup", text: `${t} New setup: ${c.name} (${c.direction}) ${c.lifecycle}.` });
     else if (was !== c.lifecycle && lifecycleRank(c.lifecycle) !== lifecycleRank(was)) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}): ${was} → ${c.lifecycle}.` });
   }
-  for (const c of prev.candidates) if (!next.candidates.some((n) => n.id === c.id)) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}) dropped (invalidated/expired).` });
+  for (const c of prev.candidates ?? []) if (!next.candidates.some((n) => n.id === c.id)) ev.push({ at, kind: "setup", text: `${t} ${c.name} (${c.direction}) dropped (invalidated/expired).` });
   if (prevCtx) {
     const a = prevCtx.regime;
     const b = ctx.regime;
@@ -268,8 +268,8 @@ export function diffDecisions(prev: DecisionRecord | null, next: DecisionRecord,
       }
     }
   }
-  for (const m of next.positions) if (m.exitSignal && !prev.positions.find((p) => p.id === m.id)?.exitSignal) ev.push({ at, kind: "position", text: `${t} ${m.exitSignal.reason}` });
+  for (const m of next.positions) if (m.exitSignal && !(prev.positions ?? []).find((p) => p.id === m.id)?.exitSignal) ev.push({ at, kind: "position", text: `${t} ${m.exitSignal.reason}` });
   if (next.closing && prev.closing && next.closing.recommendation.state !== prev.closing.recommendation.state) ev.push({ at, kind: "closing", text: `${t} Closing window: ${prev.closing.recommendation.state} → ${next.closing.recommendation.state}.` });
-  if (prev.lean.direction !== next.lean.direction) ev.push({ at, kind: "regime", text: `${t} Market lean: ${prev.lean.direction} → ${next.lean.direction} (${next.lean.strength}).` });
+  if ((prev.lean?.direction ?? null) !== next.lean.direction) ev.push({ at, kind: "regime", text: `${t} Market lean: ${prev.lean?.direction ?? "n/a"} → ${next.lean.direction} (${next.lean.strength}).` });
   return ev;
 }

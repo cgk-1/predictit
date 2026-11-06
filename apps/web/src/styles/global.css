@@ -1183,3 +1183,143 @@ code {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+
+/* ---------- summary card & lean ---------- */
+.summary-action {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin: 0;
+}
+.summary-headline {
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+}
+.summary-text {
+  font-size: var(--fs-lg);
+  max-width: 80ch;
+}
+.lean-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.sr {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-sm);
+}
+.sr-row {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr) 72px max-content;
+  gap: 0 10px;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+.sr-row:last-child {
+  border-bottom: 0;
+}
+.sr-level {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.sr-dist {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+.sr-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sr-bar {
+  display: block;
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.sr-fill {
+  display: block;
+  height: 100%;
+}
+.sr-fill-support {
+  background: var(--call);
+}
+.sr-fill-resistance {
+  background: var(--put);
+}
+.sr-strength {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  min-width: 2ch;
+  text-align: right;
+}
+.score-bar {
+  position: relative;
+  height: 18px;
+  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.score-zero {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--text-3);
+}
+.score-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.score-fill-up {
+  background: var(--call);
+}
+.score-fill-down {
+  background: var(--put);
+}
+.score-axis {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+.wbar {
+  display: inline-block;
+  width: 80px;
+  height: 6px;
+  background: var(--surface-3);
+  border-radius: 3px;
+  overflow: hidden;
+  vertical-align: middle;
+  margin-right: 6px;
+  position: relative;
+}
+.wbar-fill {
+  display: block;
+  height: 100%;
+  background: var(--manage);
+}
+.wbar-prior {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 1px;
+  background: var(--text);
+}

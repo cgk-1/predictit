@@ -9,6 +9,8 @@ import { Empty, Panel } from "../components/Panel";
 import { PriceChart } from "../components/PriceChart";
 import { RegimePanel } from "../components/RegimePanel";
 import { ModeBadge } from "../components/Badges";
+import { SummaryCard } from "../components/SummaryCard";
+import { LeanStrip } from "../components/LeanStrip";
 import { fmtAgo, fmtPts, fmtTime } from "../lib/format";
 
 export function TodayView() {
@@ -26,7 +28,11 @@ export function TodayView() {
   return (
     <>
       {s.decision ? (
-        <DecisionCard decision={s.decision} now={now} />
+        <>
+          <LeanStrip lean={s.decision.lean} />
+          <SummaryCard summary={s.decision.summary} lean={s.decision.lean} now={now} />
+          <DecisionCard decision={s.decision} now={now} />
+        </>
       ) : (
         <Empty>
           No decision yet — the engine has not evaluated a frame ({s.mode === "NONE" ? "no market data has arrived" : "waiting for the first evaluation"}). Feeds and the Schwab connection are on the Settings page.

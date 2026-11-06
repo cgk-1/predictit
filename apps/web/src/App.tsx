@@ -15,10 +15,12 @@ import { PositionsView } from "./views/Positions";
 import { ReplayView } from "./views/Replay";
 import { PerformanceView } from "./views/Performance";
 import { SettingsView } from "./views/Settings";
+import { LeanView } from "./views/Lean";
 
 const VIEWS: Array<{ path: string; label: string; title: string }> = [
   { path: "/", label: "Today", title: "Today" },
   { path: "/setups", label: "Setups", title: "Setups" },
+  { path: "/lean", label: "Lean", title: "Market lean" },
   { path: "/gamma", label: "Gamma", title: "Gamma" },
   { path: "/closing", label: "Closing window", title: "Closing window" },
   { path: "/positions", label: "Positions", title: "Positions" },
@@ -92,6 +94,9 @@ function Shell() {
   switch (path) {
     case "/setups":
       body = <SetupsView />;
+      break;
+    case "/lean":
+      body = <LeanView />;
       break;
     case "/gamma":
       body = <GammaView />;

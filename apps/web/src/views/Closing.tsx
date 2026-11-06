@@ -4,6 +4,7 @@ import { ModeBadge, stateClass, ValidationChip } from "../components/Badges";
 import { Notes } from "../components/Notes";
 import { Empty, Fact, Panel, Stat } from "../components/Panel";
 import { StrikeLadder } from "../components/StrikeLadder";
+import { LeanStrip } from "../components/LeanStrip";
 import { fmtClock, fmtContract, fmtMs, fmtPremium, fmtPts, fmtSignedPts, fmtSignedUsd, fmtTime, fmtUsd } from "../lib/format";
 
 const WINDOWS: Array<{ id: ClosingSubWindow; label: string }> = [
@@ -37,6 +38,7 @@ export function ClosingView() {
           <ModeBadge mode={c?.mode ?? s.mode} />
         </p>
       </div>
+      <LeanStrip lean={s.decision?.lean} />
       <Panel title="Sub-window" meta={c ? <span>assessed {fmtTime(c.asOf)} ET; spot {fmtPts(c.spot, 2)} ({fmtMs(c.spotAgeMs)} old at assessment)</span> : <span>from the server clock</span>}>
         <div className="subwindows" role="list" aria-label="Closing sub-windows">
           {WINDOWS.map((w, i) => (
