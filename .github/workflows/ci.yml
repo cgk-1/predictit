@@ -19,4 +19,4 @@ jobs:
       - run: pnpm --filter @predictit/web build
       - name: Secret scan (basic)
         run: |
-          ! grep -rIE --exclude-dir=node_modules --exclude-dir=.git "(cfut_|sbp_|rk_live_|github_pat_|whsec_|sk-ant-)" .
+          ! grep -rIE --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.github "(cfut_|sbp_|rk_live_|github_pat_|whsec_|sk-ant-)" .
