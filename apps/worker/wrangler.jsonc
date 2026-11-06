@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "predictit",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // Static SPA assets built by apps/web (pnpm --filter @predictit/web build). The Worker runs first for every
+  // request so authentication is enforced on assets, APIs and streams alike.
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "MARKET", "class_name": "MarketSession" },
+      { "name": "GATE", "class_name": "Gatekeeper" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MarketSession", "Gatekeeper"] }],
+  "kv_namespaces": [{ "binding": "CONFIG", "id": "REPLACE_WITH_KV_ID" }],
+  "r2_buckets": [{ "binding": "ARCHIVE", "bucket_name": "predictit-archive" }],
+  "triggers": { "crons": ["* * * * *"] },
+  "limits": { "cpu_ms": 30000 },
+  "vars": {
+    "APP_NAME": "predictit",
+    // Cloudflare Access (optional). When ACCESS_AUD is set, every request must carry a valid Cf-Access-Jwt-Assertion.
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    // Comma-separated allowed e-mails (enforced on the Access JWT `email` claim and on the fallback login).
+    "ALLOWED_EMAILS": "",
+    // Schwab OAuth callback registered in the developer portal.
+    "SCHWAB_REDIRECT_URI": "https://127.0.0.1:8182",
+    // Archive Cboe delayed snapshots to R2 ("true"/"false"). Cboe's site terms restrict storage; default off.
+    "ARCHIVE_CBOE": "false"
+  }
+}

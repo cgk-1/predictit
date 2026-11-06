@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+.wrangler/
+*.log
+.DS_Store
+# secrets — never commit
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+env.sh
+*.pem
+*.key
+# local research data (large; collected separately)
+research/data/
+research/results/raw/
+coverage/
+.vite/
+*.tsbuildinfo

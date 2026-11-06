@@ -1,0 +1,10 @@
+# Local development secrets (never commit a real .dev.vars). Production uses `wrangler secret put` / API.
+# Fallback gatekeeper passphrase (used when Cloudflare Access is not configured). Generate: openssl rand -base64 32
+GATE_PASSPHRASE=
+# 32+ random bytes, base64 — signs session cookies
+SESSION_SECRET=
+# Schwab developer app (Market Data Production)
+SCHWAB_CLIENT_ID=
+SCHWAB_CLIENT_SECRET=
+# Optional LLM explanation (never on the decision path)
+ANTHROPIC_API_KEY=
