@@ -171,6 +171,7 @@ export class MarketSession extends DurableObject<Env> {
   private running = false;
   private weights: EnsembleWeights | null = null;
   private closingLearner: ClosingLearnerState | null = null;
+  private quoteDiag: { keys: string[]; errors: unknown; at: number; sample: Record<string, string[] | null> } | null = null;
   private lastGradeSweep = 0;
   private pending: PendingPrediction[] = [];
   private lastPredictionMinute = 0;
@@ -400,6 +401,8 @@ export class MarketSession extends DurableObject<Env> {
       const o = { accessToken: token };
       // quotes every tick
       const q = await schwabApi.quotes(["$SPX", "SPY", "$TICK", "$VIX"], o);
+      // diagnostics: which symbols came back and any per-symbol errors (Schwab reports unknown symbols under "errors")
+      this.quoteDiag = { keys: Object.keys(q.raw), errors: (q.raw as any).errors ?? null, at: q.receivedAt, sample: Object.fromEntries(["$TICK", "$VIX"].map((k) => [k, q.raw[k] ? Object.keys(q.raw[k]) : null])) };
       const spx = q.raw["$SPX"] ? parseSchwabQuote("$SPX", q.raw["$SPX"], q.receivedAt) : null;
       const spy = q.raw["SPY"] ? parseSchwabQuote("SPY", q.raw["SPY"], q.receivedAt) : null;
       const tick = q.raw["$TICK"] ? { ...parseSchwabQuote("$TICK", q.raw["$TICK"], q.receivedAt), symbol: "TICK" as const } : null;
@@ -429,7 +432,7 @@ export class MarketSession extends DurableObject<Env> {
         if (chain.options.length) await this.storeSnapshot("spxChain", chain, chain.stamp.observedAt, c.receivedAt, "schwab", "LIVE", true);
         this.lastChainFetch["spx"] = now;
       }
-      if (now - (this.lastChainFetch["spy"] ?? 0) >= 30_000) {
+      if (now - (this.lastChainFetch["spy"] ?? 0) >= (clock.inClosingWindow ? 5000 : 10_000)) {
         const today = etDate(now);
         const to = new Date(now + 5 * 86400000).toISOString().slice(0, 10);
         const c = await schwabApi.chain("SPY", { strikeCount: 30, fromDate: today, toDate: to }, o);
@@ -1006,6 +1009,6 @@ export class MarketSession extends DurableObject<Env> {
   }
 
   health() {
-    return { ok: true, time: Date.now(), feeds: this.feeds, schwab: this.schwabStatus(), lastTick: this.ticks[this.ticks.length - 1] ?? null, latest: Object.fromEntries(Object.entries(this.latest).map(([k, v]) => [k, v?.receivedAt ?? null])) };
+    return { ok: true, time: Date.now(), feeds: this.feeds, schwab: this.schwabStatus(), lastTick: this.ticks[this.ticks.length - 1] ?? null, latest: Object.fromEntries(Object.entries(this.latest).map(([k, v]) => [k, v?.receivedAt ?? null])), quoteDiag: this.quoteDiag };
   }
 }
