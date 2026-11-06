@@ -727,6 +727,26 @@ export class MarketSession extends DurableObject<Env> {
     return b ?? null;
   }
 
+  /** Bars as they were known at `at` on `date` (for the Replay chart): latest stored series received at or before `at`, trimmed to completed bars. */
+  async barsAt(symbol: "SPX" | "SPY", date: string, at: number): Promise<BarSeries | null> {
+    const kind = symbol === "SPX" ? "spxBars" : "spyBars";
+    const r = this.sql.exec<{ body: ArrayBuffer }>(`SELECT body FROM snapshots WHERE date = ? AND kind = ? AND received_at <= ? ORDER BY received_at DESC LIMIT 1`, date, kind, at).toArray()[0];
+    if (!r) return null;
+    const b = JSON.parse(await gunzip(r.body)) as BarSeries;
+    return { ...b, bars: b.bars.filter((x) => x.t + 60_000 <= at) };
+  }
+
+  /** Full export of a day's ledger: decisions, changes, positions, scored predictions. */
+  exportDay(date: string): { date: string; decisions: DecisionRecord[]; changes: ChangeEvent[]; positions: PaperPosition[]; predictions: unknown[] } {
+    return {
+      date,
+      decisions: this.decisions(date),
+      changes: this.changesFor(date),
+      positions: this.allPositions(date),
+      predictions: this.sql.exec<{ body: string }>(`SELECT body FROM predictions WHERE date = ? ORDER BY at`, date).toArray().map((r) => JSON.parse(r.body)),
+    };
+  }
+
   chainSlice(pct = 0.03, maxDays = 10): ChainSnapshot | null {
     const c = this.latest.spxChain?.payload as ChainSnapshot | undefined;
     if (!c) return null;

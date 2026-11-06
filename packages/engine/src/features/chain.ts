@@ -36,6 +36,8 @@ export interface ChainFeatures {
   front: ExpiryVol | null;
   /** expected 1-sigma move in points over `minutesToClose` using the front expiry's ATM IV */
   expectedMoveToClose: number | null;
+  /** E|move| to close implied directly by the 0DTE ATM straddle mid (risk-neutral; offset-adjusted); null unless today's expiry is the front */
+  straddleAbsMoveToClose: number | null;
   liquidity: Liquidity;
   pcVolume0dte: number | null;
   pcOi0dte: number | null;
@@ -145,6 +147,7 @@ export function chainFeatures(chain: ChainSnapshot, asOf: number, minutesToClose
   }
   const front = expiries[0] ?? null;
   const expectedMoveToClose = front?.atmIv && minutesToClose > 0 ? chain.spot * front.atmIv * Math.sqrt(minutesToClose / TRADING_MINUTES_PER_YEAR) : null;
+  const straddleAbsMoveToClose = front && front.expiry === today && front.straddleMid !== null ? Math.max(0, front.straddleMid - Math.abs(chain.spot - front.atmStrike)) : null;
   const dte0 = chain.options.filter((o) => o.expiry === today);
   const cv = dte0.filter((o) => o.right === "C").reduce((a, o) => a + o.volume, 0);
   const pv = dte0.filter((o) => o.right === "P").reduce((a, o) => a + o.volume, 0);
@@ -160,6 +163,7 @@ export function chainFeatures(chain: ChainSnapshot, asOf: number, minutesToClose
     expiries,
     front,
     expectedMoveToClose,
+    straddleAbsMoveToClose,
     liquidity: liq,
     pcVolume0dte: cv > 0 ? pv / cv : null,
     pcOi0dte: co > 0 ? po / co : null,

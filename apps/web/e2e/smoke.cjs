@@ -1,8 +1,9 @@
 // Playwright smoke test against a running deployment (local wrangler dev or the workers.dev URL).
 // Usage: BASE_URL=https://... GATE_PASSPHRASE=... node apps/web/e2e/smoke.mjs [outDir]
-import { chromium } from "playwright";
-import { mkdirSync } from "node:fs";
+const { chromium } = require("playwright");
+const { mkdirSync } = require("node:fs");
 
+(async () => {
 const base = process.env.BASE_URL ?? "http://127.0.0.1:8787";
 const pass = process.env.GATE_PASSPHRASE ?? "";
 const out = process.argv[2] ?? "e2e-out";
@@ -17,8 +18,9 @@ page.on("console", (m) => { if (m.type() === "error") errors.push(`console: ${m.
 let res = await page.goto(base + "/", { waitUntil: "domcontentloaded" });
 if (res.status() !== 401) throw new Error(`expected 401 login shell, got ${res.status()}`);
 await page.fill("#p", pass);
-await Promise.all([page.waitForNavigation({ waitUntil: "networkidle" }).catch(() => {}), page.click("button")]);
+await Promise.all([page.waitForNavigation({ waitUntil: "networkidle" }), page.click("button[type=submit]")]);
 await page.waitForTimeout(1500);
+if ((await page.title()).includes("sign in")) throw new Error("login did not succeed");
 // 2. authenticated app routes
 const routes = ["/", "/setups", "/gamma", "/closing", "/lean", "/positions", "/replay", "/performance", "/settings"];
 for (const r of routes) {
@@ -39,3 +41,4 @@ console.log(`phone scrollWidth=${scrollW} (must be ≤ 390)`);
 await browser.close();
 if (errors.length) { console.log("ERRORS:\n" + errors.join("\n")); process.exit(1); }
 console.log("smoke ok");
+})();

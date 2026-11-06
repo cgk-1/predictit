@@ -8,6 +8,7 @@ import type { LeanResult } from "../lean/ensemble";
 import type { SRLevel } from "../features/sr";
 import type { EngineContext } from "./context";
 import { TRADING_MINUTES_PER_YEAR } from "../pricing/tte";
+import { normCdf } from "../pricing/bs";
 
 export interface CleanSummary {
   asOf: number;
@@ -19,7 +20,10 @@ export interface CleanSummary {
   action: "BUY CALL" | "BUY PUT" | "WAIT" | "PASS" | "MANAGE";
   actionText: string;
   contract: { osi: string; label: string; bid: number; ask: number; riskUsd: number; breakeven: number; entryCondition: string } | null;
-  expectedMove: { toCloseSigmaPts: number | null; horizonMinutes: number | null; toHorizonSigmaPts: number | null; source: string };
+  expectedMove: { toCloseSigmaPts: number | null; horizonMinutes: number | null; toHorizonSigmaPts: number | null; straddleAbsMoveToClose: number | null; source: string };
+  /** overnight gap state with the reflection-principle null for a fill (2·(1−Φ(gap/σ_to_close))) */
+  gap: { pts: number | null; filled: boolean | null; fillLevel: number | null; nullFillProb: number | null };
+  calendar: { dayName: string; timeBucket: string; isMonthlyOpex: boolean; isEarlyClose: boolean; priorDayRet: number | null; priorCloseLocation: number | null; weekToDatePct: number | null; priorWeekRet: number | null; coverageDays: number } | null;
   whenToSell: string[];
   support: SRLevel[];
   resistance: SRLevel[];
@@ -77,6 +81,9 @@ export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: Lean
   for (const a of lean.against) keyRisks.push(`Against the lean — ${a}`);
   const why = [...lean.top];
   if (rec.primary) why.push(`${rec.primary.name}: ${rec.primary.evidence.map((e) => `${e.label} ${e.value}`).join("; ")}`);
+  const cal = ctx.calendar;
+  const gapPts = cal?.today.gapPts ?? null;
+  const nullFillProb = gapPts !== null && gapPts !== 0 && toClose && toClose > 0 && cal?.today.gapFilled === false ? 2 * (1 - normCdf(Math.abs(gapPts) / toClose)) : cal?.today.gapFilled ? 1 : null;
   return {
     asOf: ctx.asOf,
     headline,
@@ -87,7 +94,9 @@ export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: Lean
     action,
     actionText,
     contract,
-    expectedMove: { toCloseSigmaPts: toClose, horizonMinutes: horizon, toHorizonSigmaPts: toHorizon, source: atmIv ? "0DTE ATM implied vol (trading-time), 1σ" : rec.closing ? "closing-window σ (straddle/realized + settlement noise)" : "n/a" },
+    expectedMove: { toCloseSigmaPts: toClose, horizonMinutes: horizon, toHorizonSigmaPts: toHorizon, straddleAbsMoveToClose: ctx.spxChain?.straddleAbsMoveToClose ?? null, source: atmIv ? "0DTE ATM implied vol (trading-time), 1σ" : rec.closing ? "closing-window σ (straddle/realized + settlement noise)" : "n/a" },
+    gap: { pts: gapPts, filled: cal?.today.gapFilled ?? null, fillLevel: cal?.today.gapFillLevel ?? null, nullFillProb },
+    calendar: cal ? { dayName: cal.dayName, timeBucket: cal.timeBucket, isMonthlyOpex: cal.isMonthlyOpex, isEarlyClose: cal.isEarlyClose, priorDayRet: cal.prior?.ret ?? null, priorCloseLocation: cal.prior?.closeLocation ?? null, weekToDatePct: cal.weekToDatePct, priorWeekRet: cal.priorWeek?.ret ?? null, coverageDays: cal.coverageDays } : null,
     whenToSell,
     support: sr.support,
     resistance: sr.resistance,

@@ -28,6 +28,16 @@ a prospective paper ledger; results accrue from here. The first replay (one part
   the clamps, while the wall-proximity indicator scored best. One day proves nothing except that scoring, bounded
   updates, abstention and interval reporting work end-to-end on real data.
 
+## Planned tests (from docs/research/ensemble_and_seasonality.md)
+
+- Level strength: Osler-style protocol — conditional bounce rate at our S/R levels vs 10,000 random levels, by level
+  type and strength bucket.
+- Gap fill: realized fill rate vs the reflection-principle null 2·(1−Φ(gap/σ_session)).
+- Ensemble: 300-decision burn-in at prior weights, Brier with half-life ≈500, Platt calibration on a trailing
+  out-of-sample window, SPA/deflated-Sharpe hurdle against the fixed trial registry, option-P&L-after-spread as the
+  economic test.
+- Intraday momentum: rest-of-day return → last-30-minute return, conditional on the dealer-gamma sign.
+
 ## What would change a label from "unvalidated"
 
 ≥ 60 sessions of LIVE as-of data, positive net expectancy after costs in the untouched test period, not driven by

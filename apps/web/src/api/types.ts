@@ -102,7 +102,8 @@ export type ChainResponse = ChainSnapshot | null;
 /** API surface (all same-origin, JSON, cookie/Access authenticated):
  *  GET  /api/state                      → ServerState
  *  GET  /api/health
- *  GET  /api/bars?symbol=SPX|SPY        → BarsResponse (today's 1-minute bars)
+ *  GET  /api/bars?symbol=SPX|SPY        → BarsResponse (today's 1-minute bars); with &date=&at=<ms> → bars as known at that instant (replay)
+ *  GET  /api/export?date=YYYY-MM-DD     → { date, decisions, changes, positions, predictions } (download)
  *  GET  /api/chain?pct=0.03&days=10     → ChainResponse (near-money SPX chain slice)
  *  GET  /api/decisions?date=YYYY-MM-DD  → DecisionRecord[] (immutable ledger)
  *  GET  /api/changes?date=              → ChangeEvent[]

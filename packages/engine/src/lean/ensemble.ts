@@ -54,9 +54,14 @@ export interface EnsembleConfig {
   horizonsMin: number[];
   /** scored predictions needed before a probability is shown */
   minScoredForProbability: number;
+  /** scored predictions accumulated before learned weights replace the priors in the live lean (burn-in) */
+  burnIn: number;
 }
 
-export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = { eta: 0.05, minMult: 0.25, maxMult: 3, decay: 0.998, flatThreshold: 0.0002, horizonsMin: [15, 60], minScoredForProbability: 200 };
+// η≈0.04 follows the Hedge rate √(ln n / T) for n≈25 experts and T≈2000 decisions; clamps and the slow pull toward
+// the prior play the role of fixed-share forgetting; a 300-decision burn-in keeps the live lean at prior weights
+// until there is something to learn from (docs/research/ensemble_and_seasonality.md §7).
+export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = { eta: 0.04, minMult: 0.25, maxMult: 3, decay: 0.998, flatThreshold: 0.0002, horizonsMin: [15, 60], minScoredForProbability: 300, burnIn: 300 };
 
 export const INDICATORS: IndicatorSpec[] = [
   { id: "mom5", label: "5-min momentum", family: "momentum", hypothesis: "Very short-term continuation.", evidence: "C", priorWeight: 0.6 },
@@ -76,11 +81,12 @@ export const INDICATORS: IndicatorSpec[] = [
   { id: "pcVol", label: "0DTE put/call volume (contrarian)", family: "flow", hypothesis: "Heavy put volume is a contrarian positive.", evidence: "C", priorWeight: 0.4 },
   { id: "optVolTilt", label: "Recent call vs put volume tilt", family: "flow", hypothesis: "Call-heavy recent minutes lean up.", evidence: "C", priorWeight: 0.4 },
   { id: "spyConfirm", label: "SPY confirmation", family: "cross-market", hypothesis: "SPY agreeing with SPX strengthens the move.", evidence: "C", priorWeight: 0.8 },
-  { id: "dow", label: "Day-of-week prior", family: "calendar", hypothesis: "Monday has leaned positive 2023–2026 (daily, in-sample).", evidence: "D", priorWeight: 0.3 },
+  { id: "dow", label: "Day-of-week prior", family: "calendar", hypothesis: "Monday has leaned positive 2023–2026 (daily, in-sample); literature finds day-of-week effects largely absent post-1990.", evidence: "D", priorWeight: 0.15 },
+  { id: "tom", label: "Turn-of-month", family: "calendar", hypothesis: "Days −1..+3 around month-end carry higher average returns (daily-close evidence; intraday share unknown).", evidence: "B", priorWeight: 0.2 },
   { id: "prevDayRet", label: "Prior-day return (daily reversion)", family: "calendar", hypothesis: "After ±1% days the next day leans the other way (daily, in-sample).", evidence: "D", priorWeight: 0.4 },
   { id: "prevWeek", label: "Prior-week return (weekly reversion)", family: "calendar", hypothesis: "Down weeks are followed by stronger weeks (daily, in-sample).", evidence: "D", priorWeight: 0.3 },
   { id: "prevClose", label: "Prior-day closing strength", family: "calendar", hypothesis: "A strong close carries into the next session.", evidence: "C", priorWeight: 0.3 },
-  { id: "intradayMom", label: "Intraday momentum (open→now into last hour)", family: "momentum", hypothesis: "First-hours direction predicts the last hour (Gao et al.).", evidence: "B", priorWeight: 0.8 },
+  { id: "intradayMom", label: "Intraday momentum (rest-of-day → last 30 min)", family: "momentum", hypothesis: "The day's return to 15:30 predicts the last half hour (Gao et al. 2018; Baltussen et al. 2021). Active only in the final 30 minutes.", evidence: "B", priorWeight: 0.8 },
 ];
 
 export function initialWeights(now: number): EnsembleWeights {
@@ -162,11 +168,26 @@ export function indicatorVotes(ctx: EngineContext, cal: CalendarFeatures | null)
   const cl = cal?.prior?.closeLocation ?? null;
   push("prevClose", cl === null ? null : cl > 0.8 ? 0.2 : cl < 0.2 ? -0.2 : 0, cl === null ? "no prior close location" : `prior close location ${(cl * 100).toFixed(0)}%`);
   const open = b.sessOpen;
-  if (open && ctx.clock.minutesToClose <= 90 && ctx.clock.minutesToClose > 0) {
+  if (open && ctx.clock.minutesToClose <= 30 && ctx.clock.minutesToClose > 0) {
     const dayRet = spot / open - 1;
-    push("intradayMom", Math.abs(dayRet) >= 0.003 ? Math.sign(dayRet) * 0.6 : 0, `day ${fmtPct(dayRet)} into the last 90m`);
-  } else push("intradayMom", 0, "outside last 90 minutes");
+    push("intradayMom", Math.abs(dayRet) >= 0.003 ? Math.sign(dayRet) * 0.6 : 0, `day ${fmtPct(dayRet)} into the last 30m`);
+  } else push("intradayMom", 0, "active only in the last 30 minutes");
+  // turn-of-month: last trading day of the month through the third trading day of the next
+  const tom = cal ? isTurnOfMonth(cal.date) : null;
+  push("tom", tom === null ? null : tom ? 0.3 : 0, tom === null ? "n/a" : tom ? "turn-of-month window (−1..+3)" : "not turn-of-month");
   return v;
+}
+
+function isTurnOfMonth(date: string): boolean {
+  const [y, m, d] = date.split("-").map(Number) as [number, number, number];
+  // count trading days from the start of this month and to the end of this month (weekday approximation; holidays shift by ≤1 day)
+  const dow = (yy: number, mm: number, dd: number) => new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
+  let before = 0;
+  for (let i = 1; i < d; i++) if (dow(y, m, i) % 6) before++;
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  let after = 0;
+  for (let i = d + 1; i <= daysInMonth; i++) if (dow(y, m, i) % 6) after++;
+  return before < 3 || after === 0; // first three trading days of a month, or the last trading day
 }
 
 function fmtPct(x: number | null): string {
@@ -175,6 +196,8 @@ function fmtPct(x: number | null): string {
 
 export interface LeanResult {
   asOf: number;
+  /** whether learned weights or the priors produced this lean */
+  weightsMode: "learned" | "prior (burn-in)";
   score: number;
   direction: "UP" | "DOWN" | "NEUTRAL";
   strength: "none" | "weak" | "moderate" | "strong";
@@ -186,8 +209,10 @@ export interface LeanResult {
   validation: "unvalidated" | "prospective";
 }
 
-export function computeLean(ctx: EngineContext, cal: CalendarFeatures | null, weights: EnsembleWeights): LeanResult {
+export function computeLean(ctx: EngineContext, cal: CalendarFeatures | null, weights: EnsembleWeights, cfg: EnsembleConfig = DEFAULT_ENSEMBLE_CONFIG): LeanResult {
   const votes = indicatorVotes(ctx, cal);
+  const scoredTotal = Object.values(weights.ensemble).reduce((a, e) => a + e.n, 0);
+  const useLearned = scoredTotal >= cfg.burnIn;
   let num = 0;
   let den = 0;
   let avail = 0;
@@ -195,7 +220,7 @@ export function computeLean(ctx: EngineContext, cal: CalendarFeatures | null, we
   const rows: LeanResult["votes"] = [];
   for (const vt of votes) {
     const spec = INDICATORS.find((i) => i.id === vt.id)!;
-    const w = weights.w[vt.id] ?? spec.priorWeight;
+    const w = useLearned ? (weights.w[vt.id] ?? spec.priorWeight) : spec.priorWeight;
     const contribution = vt.vote === null ? 0 : w * vt.vote;
     if (vt.vote !== null) {
       avail++;
@@ -211,9 +236,10 @@ export function computeLean(ctx: EngineContext, cal: CalendarFeatures | null, we
   const abs = Math.abs(score);
   const strength: LeanResult["strength"] = abs < 0.12 ? "none" : abs < 0.3 ? "weak" : abs < 0.5 ? "moderate" : "strong";
   const sorted = [...rows].filter((r) => r.vote !== null && r.vote !== 0).sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
-  const n = Object.values(weights.ensemble).reduce((a, e) => a + e.n, 0);
+  const n = scoredTotal;
   return {
     asOf: ctx.asOf,
+    weightsMode: useLearned ? "learned" : "prior (burn-in)",
     score,
     direction: strength === "none" ? "NEUTRAL" : score > 0 ? "UP" : "DOWN",
     strength,
@@ -339,7 +365,10 @@ export function leanStats(weights: EnsembleWeights, cfg: EnsembleConfig = DEFAUL
     return { id: i.id, label: i.label, weight: weights.w[i.id] ?? i.priorWeight, prior: i.priorWeight, n: st?.n ?? 0, hitRate: st && st.n ? st.hits / st.n : null };
   });
   const ok = total >= cfg.minScoredForProbability;
-  return { horizons, indicators, calibratedProbabilityAvailable: ok, note: ok ? "Hit rates are prospective (paper), not out-of-sample validated strategies." : `Calibrated probabilities withheld until ≥${cfg.minScoredForProbability} scored predictions (currently ${total}).` };
+  const note = ok
+    ? "Hit rates are prospective (paper), not out-of-sample validated strategies. 95% Wilson half-widths: ±9.6 pp at n=100, ±5.6 pp at n=300, ±3.1 pp at n=1000."
+    : `Calibrated probabilities withheld until ≥${cfg.minScoredForProbability} scored predictions (currently ${total}); learned weights apply after a ${cfg.burnIn}-decision burn-in. Detecting a 55% hit rate vs 50% with 80% power needs ≈616 decisions.`;
+  return { horizons, indicators, calibratedProbabilityAvailable: ok, note };
 }
 
 /** Pseudo-probability from the lean score, ONLY for display when the ledger supports it. */

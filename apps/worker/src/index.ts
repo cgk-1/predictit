@@ -13,7 +13,7 @@ export { MarketSession, Gatekeeper };
 const SECURITY_HEADERS: Record<string, string> = {
   "x-frame-options": "DENY",
   "x-content-type-options": "nosniff",
-  "referrer-policy": "no-referrer",
+  "referrer-policy": "same-origin",
   "x-robots-tag": "noindex, nofollow, noarchive",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
   "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
@@ -42,20 +42,28 @@ async function handleAuth(req: Request, env: Env, url: URL): Promise<Response | 
     const ip = clientIp(req);
     const chk = await gate.check(ip);
     if (!chk.allowed) return json({ error: `Too many attempts; retry in ${chk.retryAfterSec}s.` }, { status: 429, headers: { "retry-after": String(chk.retryAfterSec) } });
+    // Accept JSON (API clients) or a plain HTML form post (the no-script login shell).
     let body: { passphrase?: string; email?: string } = {};
+    const ctype = req.headers.get("content-type") ?? "";
+    const isForm = ctype.includes("application/x-www-form-urlencoded") || ctype.includes("multipart/form-data");
     try {
-      body = (await req.json()) as typeof body;
+      if (isForm) {
+        const fd = await req.formData();
+        body = { passphrase: String(fd.get("passphrase") ?? ""), email: String(fd.get("email") ?? "") };
+      } else body = (await req.json()) as typeof body;
     } catch {
       /* ignore */
     }
-    const ok = typeof body.passphrase === "string" && timingSafeEqual(body.passphrase, env.GATE_PASSPHRASE);
+    const ok = typeof body.passphrase === "string" && body.passphrase.length > 0 && timingSafeEqual(body.passphrase, env.GATE_PASSPHRASE);
     if (!ok) {
       await gate.fail(ip);
+      if (isForm) return loginPage(env, "Invalid passphrase.");
       return json({ error: "Invalid passphrase." }, { status: 401 });
     }
     await gate.success(ip);
     const now = Math.floor(Date.now() / 1000);
     const token = await signSession(env.SESSION_SECRET, { sub: body.email?.toLowerCase() || "owner", iat: now, exp: now + SESSION_TTL_SEC, via: "gate" });
+    if (isForm) return new Response(null, { status: 303, headers: { location: "/", "set-cookie": sessionCookie(token) } });
     return json({ ok: true, expiresAt: (now + SESSION_TTL_SEC) * 1000 }, { headers: { "set-cookie": sessionCookie(token) } });
   }
   if (url.pathname === "/api/auth/logout" && req.method === "POST") {
@@ -78,7 +86,18 @@ async function handleApi(req: Request, env: Env, url: URL, sub: string): Promise
       await m.ensureAlarm();
       return json(await m.state());
     }
-    if (p === "/bars") return json(await m.bars(q.get("symbol") === "SPY" ? "SPY" : "SPX"));
+    if (p === "/bars") {
+      const sym = q.get("symbol") === "SPY" ? "SPY" : "SPX";
+      const date = q.get("date");
+      const at = Number(q.get("at"));
+      if (date && Number.isFinite(at)) return json(await m.barsAt(sym, date, at));
+      return json(await m.bars(sym));
+    }
+    if (p === "/export") {
+      const date = q.get("date");
+      if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: "date=YYYY-MM-DD required" }, { status: 400 });
+      return json(await m.exportDay(date), { headers: { "content-disposition": `attachment; filename="predictit-${date}.json"` } });
+    }
     if (p === "/chain") return json(await m.chainSlice(Number(q.get("pct") ?? 0.03), Number(q.get("days") ?? 10)));
     if (p === "/decisions") return json(await m.decisions(q.get("date") ?? new Date().toISOString().slice(0, 10)));
     if (p === "/changes") return json(await m.changesFor(q.get("date") ?? new Date().toISOString().slice(0, 10)));
@@ -138,10 +157,13 @@ export default {
     const url = new URL(req.url);
     // same-origin only for state-changing requests
     if (req.method !== "GET" && req.method !== "HEAD") {
+      // Browsers serialize Origin as "null" under some referrer policies and for opaque origins; Sec-Fetch-Site is the
+      // authoritative signal when present. Reject when either header positively indicates another origin.
       const origin = req.headers.get("origin");
-      if (origin && origin !== url.origin) return withSecurity(json({ error: "cross-origin request refused" }, { status: 403 }));
       const fetchSite = req.headers.get("sec-fetch-site");
+      if (origin && origin !== "null" && origin !== url.origin) return withSecurity(json({ error: "cross-origin request refused" }, { status: 403 }));
       if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") return withSecurity(json({ error: "cross-site request refused" }, { status: 403 }));
+      if (origin === "null" && !fetchSite) return withSecurity(json({ error: "opaque-origin request refused" }, { status: 403 }));
     }
     const authRes = await handleAuth(req, env, url);
     if (authRes) return withSecurity(authRes);
@@ -162,10 +184,11 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function loginPage(env: Env): Response {
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${env.APP_NAME} · sign in</title>
-<style>:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d10;color:#e6e8eb;font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}form{width:min(360px,90vw);padding:28px;border:1px solid #23272e;border-radius:12px;background:#111418}h1{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:#9aa3ad;margin:0 0 18px}input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #2a2f37;background:#0b0d10;color:#e6e8eb;font:inherit;margin:6px 0 14px}button{width:100%;padding:10px;border-radius:8px;border:0;background:#e6e8eb;color:#0b0d10;font:inherit;font-weight:600;cursor:pointer}p{color:#9aa3ad;font-size:13px}.err{color:#ff6b6b;min-height:1.2em}</style></head>
-<body><form id="f"><h1>${env.APP_NAME}</h1><label>Passphrase<input id="p" type="password" autocomplete="current-password" autofocus required></label><button>Sign in</button><p class="err" id="e"></p><p>Private research terminal. Access is server-enforced; this page is served only to unauthenticated requests.</p></form>
-<script>document.getElementById('f').addEventListener('submit',async(ev)=>{ev.preventDefault();const e=document.getElementById('e');e.textContent='';const r=await fetch('/api/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({passphrase:document.getElementById('p').value})});if(r.ok){location.reload();}else{const j=await r.json().catch(()=>({error:'Error'}));e.textContent=j.error||'Error';}});</script></body></html>`;
+/** No-script login shell: a plain form post keeps the strict CSP (script-src 'self') intact. */
+function loginPage(env: Env, error = ""): Response {
+  const esc = (x: string) => x.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${esc(env.APP_NAME)} · sign in</title>
+<style>:root{color-scheme:dark}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d10;color:#e6e8eb;font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}form{width:min(360px,90vw);padding:28px;border:1px solid #23272e;border-radius:12px;background:#111418}h1{font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:#9aa3ad;margin:0 0 18px}label{display:block;color:#9aa3ad;font-size:13px}input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #2a2f37;background:#0b0d10;color:#e6e8eb;font:inherit;margin:6px 0 14px}button{width:100%;padding:10px;border-radius:8px;border:0;background:#e6e8eb;color:#0b0d10;font:inherit;font-weight:600;cursor:pointer}p{color:#9aa3ad;font-size:13px}.err{color:#ff6b6b;min-height:1.2em}</style></head>
+<body><form method="post" action="/api/auth/login"><h1>${esc(env.APP_NAME)}</h1><label for="p">Passphrase</label><input id="p" name="passphrase" type="password" autocomplete="current-password" autofocus required><button type="submit">Sign in</button><p class="err">${esc(error)}</p><p>Private research terminal. Access is server-enforced; this page is served only to unauthenticated requests.</p></form></body></html>`;
   return new Response(html, { status: 401, headers: { "content-type": "text/html; charset=utf-8" } });
 }

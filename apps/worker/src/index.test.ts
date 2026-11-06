@@ -71,6 +71,25 @@ describe("worker router", () => {
     const r2 = await worker.fetch(new Request("https://x/api/positions", { method: "POST", headers: { cookie: `${SESSION_COOKIE}=${token}`, "sec-fetch-site": "cross-site", "content-type": "application/json" }, body: "{}" }), e, ctx);
     expect(r2.status).toBe(403);
   });
+  it("accepts a plain form post and redirects with the cookie; wrong passphrase re-renders the shell", async () => {
+    const e = env(gate);
+    const bad = await worker.fetch(new Request("https://x/api/auth/login", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://x" }, body: "passphrase=wrong" }), e, ctx);
+    expect(bad.status).toBe(401);
+    expect(await bad.text()).toContain("Invalid passphrase");
+    const ok = await worker.fetch(new Request("https://x/api/auth/login", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "https://x" }, body: "passphrase=correct+horse" }), e, ctx);
+    expect(ok.status).toBe(303);
+    expect(ok.headers.get("location")).toBe("/");
+    expect(ok.headers.get("set-cookie")).toMatch(/HttpOnly/);
+  });
+  it("allows a form post whose Origin is serialized as null when Sec-Fetch-Site says same-origin, and rejects cross-site", async () => {
+    const e = env(gate);
+    const ok = await worker.fetch(new Request("https://x/api/auth/login", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "null", "sec-fetch-site": "same-origin" }, body: "passphrase=correct+horse" }), e, ctx);
+    expect(ok.status).toBe(303);
+    const bad = await worker.fetch(new Request("https://x/api/auth/login", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "null", "sec-fetch-site": "cross-site" }, body: "passphrase=correct+horse" }), e, ctx);
+    expect(bad.status).toBe(403);
+    const opaque = await worker.fetch(new Request("https://x/api/auth/login", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", origin: "null" }, body: "passphrase=correct+horse" }), e, ctx);
+    expect(opaque.status).toBe(403);
+  });
   it("logout clears the cookie", async () => {
     const r = await worker.fetch(new Request("https://x/api/auth/logout", { method: "POST", headers: { origin: "https://x" } }), env(gate), ctx);
     expect(r.headers.get("set-cookie")).toMatch(/Max-Age=0/);
