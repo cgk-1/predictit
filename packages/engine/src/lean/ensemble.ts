@@ -83,6 +83,11 @@ export const INDICATORS: IndicatorSpec[] = [
   { id: "pcVol", label: "0DTE put/call volume (contrarian)", family: "flow", hypothesis: "Heavy put volume is a contrarian positive.", evidence: "C", priorWeight: 0.4 },
   { id: "optVolTilt", label: "Recent call vs put volume tilt", family: "flow", hypothesis: "Call-heavy recent minutes lean up.", evidence: "C", priorWeight: 0.4 },
   { id: "spyConfirm", label: "SPY confirmation", family: "cross-market", hypothesis: "SPY agreeing with SPX strengthens the move.", evidence: "C", priorWeight: 0.8 },
+  { id: "tf5", label: "5-min trend (EMA 9/21)", family: "momentum", hypothesis: "5-minute EMA alignment continues over the next 15–30 minutes.", evidence: "C", priorWeight: 0.7 },
+  { id: "tf10", label: "10-min trend (EMA 9/21)", family: "momentum", hypothesis: "10-minute EMA alignment continues.", evidence: "C", priorWeight: 0.8 },
+  { id: "tf30", label: "30-min trend (EMA 9/21)", family: "momentum", hypothesis: "30-minute EMA alignment sets the session bias.", evidence: "C", priorWeight: 1.0 },
+  { id: "tfAlign", label: "Timeframe alignment", family: "structure", hypothesis: "Aligned timeframes continue; a pullback inside a higher-timeframe trend resumes.", evidence: "C", priorWeight: 0.8 },
+  { id: "rsi30", label: "30-min RSI extreme (contrarian)", family: "mean-reversion", hypothesis: "RSI14 above 70 / below 30 on 30-minute bars marks stretched conditions.", evidence: "C", priorWeight: 0.4 },
   { id: "tickTrend", label: "TICK 10-min average (participation)", family: "cross-market", hypothesis: "Persistently signed NYSE TICK marks broad participation that continues.", evidence: "C", priorWeight: 0.8 },
   { id: "tickExtreme", label: "TICK extreme (contrarian)", family: "mean-reversion", hypothesis: "Readings beyond ±1000 mark short-term exhaustion.", evidence: "C", priorWeight: 0.6 },
   { id: "tickDivergence", label: "TICK vs price divergence", family: "cross-market", hypothesis: "Price moving without breadth support reverts.", evidence: "C", priorWeight: 0.6 },
@@ -186,6 +191,21 @@ export function indicatorVotes(ctx: EngineContext, cal: CalendarFeatures | null)
   } else push("optVolTilt", null, "no per-minute options volume");
   const s = ctx.spyBars;
   push("spyConfirm", s && s.ret15 !== null && b.ret15 !== null ? (Math.sign(s.ret15) === Math.sign(b.ret15) ? scaled(b.ret15, 2 * unitRet) : 0) : null, s ? `SPY 15m ${fmtPct(s.ret15 ?? null)}` : "no SPY");
+  // multi-timeframe
+  const mtf = ctx.mtf;
+  const tfVote = (tf: 5 | 10 | 30) => {
+    const f = mtf?.frames.find((x) => x.tf === tf);
+    if (!f || f.trend === "n/a") return { v: null as number | null, r: `${tf}m: insufficient bars` };
+    return { v: f.trend === "up" ? 0.4 + 0.6 * f.strength : f.trend === "down" ? -(0.4 + 0.6 * f.strength) : 0, r: f.text };
+  };
+  for (const tf of [5, 10, 30] as const) {
+    const x = tfVote(tf);
+    push(`tf${tf}`, x.v, x.r);
+  }
+  const al = mtf?.alignment.label ?? "n/a";
+  push("tfAlign", al === "n/a" ? null : al === "aligned-up" ? 0.7 : al === "aligned-down" ? -0.7 : al === "pullback-in-uptrend" ? 0.35 : al === "bounce-in-downtrend" ? -0.35 : 0, mtf?.alignment.text ?? "n/a");
+  const r30 = mtf?.frames.find((x) => x.tf === 30)?.rsi14 ?? null;
+  push("rsi30", r30 === null ? null : r30 >= 70 ? -0.4 : r30 <= 30 ? 0.4 : 0, r30 === null ? "30m RSI n/a" : `30m RSI ${r30.toFixed(0)}`);
   // NYSE TICK (live feed only)
   const tk = ctx.tick;
   if (tk.label !== "n/a" && tk.avg10 !== null && tk.last !== null) {

@@ -16,9 +16,11 @@ import { ReplayView } from "./views/Replay";
 import { PerformanceView } from "./views/Performance";
 import { SettingsView } from "./views/Settings";
 import { LeanView } from "./views/Lean";
+import { DashView } from "./views/Dash";
 
 const VIEWS: Array<{ path: string; label: string; title: string }> = [
-  { path: "/", label: "Today", title: "Today" },
+  { path: "/", label: "Dash", title: "Dash" },
+  { path: "/today", label: "Today", title: "Today" },
   { path: "/setups", label: "Setups", title: "Setups" },
   { path: "/lean", label: "Lean", title: "Market lean" },
   { path: "/gamma", label: "Gamma", title: "Gamma" },
@@ -116,8 +118,11 @@ function Shell() {
     case "/settings":
       body = <SettingsView theme={theme} setTheme={setTheme} />;
       break;
-    default:
+    case "/today":
       body = <TodayView />;
+      break;
+    default:
+      body = <DashView />;
   }
 
   return (

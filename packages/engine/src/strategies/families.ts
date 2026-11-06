@@ -112,13 +112,20 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
   const atr = b.atr14 ?? 2;
   const wait = (family: WaitReason["family"], reason: string) => out.waits.push({ family, reason });
 
-  // 1. Trend pullback
+  // 1. Trend pullback — multi-timeframe definition when 30-minute bars exist (30m trend, 5m pullback, 1m resumption);
+  //    falls back to the 60-minute efficiency definition otherwise.
   if (STRATEGY_META["trend-pullback"]!.phases.includes(phase)) {
-    if (b.er60 === null || b.ret60 === null) wait("trend-pullback", "Needs 61 completed bars.");
-    else if (b.er60 < 0.3 || Math.abs(b.ret60) < 0.002) wait("trend-pullback", `No efficient trend (ER60 ${b.er60.toFixed(2)}, 60m ${(b.ret60 * 100).toFixed(2)}%).`);
+    const f30 = ctx.mtf?.frames.find((f) => f.tf === 30);
+    const f5 = ctx.mtf?.frames.find((f) => f.tf === 5);
+    const f1 = ctx.mtf?.frames.find((f) => f.tf === 1);
+    const mtfOk = f30 && f30.trend !== "n/a" && f5 && f1;
+    const upMtf = mtfOk ? (f30!.trend === "up" ? true : f30!.trend === "down" ? false : null) : null;
+    if (mtfOk && upMtf === null) wait("trend-pullback", `30-minute trend flat (${f30!.text}).`);
+    else if (!mtfOk && (b.er60 === null || b.ret60 === null)) wait("trend-pullback", "Needs 61 completed bars (or 30-minute history).");
+    else if (!mtfOk && (b.er60! < 0.3 || Math.abs(b.ret60!) < 0.002)) wait("trend-pullback", `No efficient trend (ER60 ${b.er60!.toFixed(2)}, 60m ${(b.ret60! * 100).toFixed(2)}%).`);
     else {
-      const up = b.ret60 > 0;
-      const r5 = b.ret5 ?? 0;
+      const up = mtfOk ? upMtf! : b.ret60! > 0;
+      const r5 = mtfOk ? (f5!.lastBarRetPct ?? 0) / 100 : b.ret5 ?? 0;
       const pulledBack = up ? r5 < -0.0005 : r5 > 0.0005; // counter-trend last 5 minutes
       const resumed = up ? (b.ret1 ?? 0) > 0 : (b.ret1 ?? 0) < 0;
       const lifecycle = pulledBack && !resumed ? "armed" : pulledBack && resumed ? "triggered" : "forming";
@@ -126,8 +133,10 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
       out.candidates.push({
         ...base(ctx, "trend-pullback", up ? "call" : "put", up ? "up" : "down"),
         lifecycle,
-        evidence: [ev(ctx, "60m efficiency", b.er60.toFixed(2)), ev(ctx, "60m return", `${(b.ret60 * 100).toFixed(2)}%`), ev(ctx, "5m return", `${(r5 * 100).toFixed(2)}%`), ev(ctx, "ATR14", atr.toFixed(2))],
-        triggerCondition: `After a ≥0.05% counter-trend pullback over 5 min, a 1-minute close back in the trend direction.`,
+        evidence: mtfOk
+          ? [ev(ctx, "30m trend", f30!.text), ev(ctx, "5m last bar", `${(r5 * 100).toFixed(2)}%`), ev(ctx, "1m", `${((b.ret1 ?? 0) * 100).toFixed(2)}%`), ev(ctx, "ATR14 (1m)", atr.toFixed(2))]
+          : [ev(ctx, "60m efficiency", b.er60!.toFixed(2)), ev(ctx, "60m return", `${(b.ret60! * 100).toFixed(2)}%`), ev(ctx, "5m return", `${(r5 * 100).toFixed(2)}%`), ev(ctx, "ATR14", atr.toFixed(2))],
+        triggerCondition: mtfOk ? `30-minute EMA trend ${up ? "up" : "down"}; a counter-trend 5-minute bar; then a 1-minute close back in the trend direction.` : `After a ≥0.05% counter-trend pullback over 5 min, a 1-minute close back in the trend direction.`,
         entryZone: up ? { low: last - atr, high: last + 0.5 * atr } : { low: last - 0.5 * atr, high: last + atr },
         invalidationLevel: inval,
         invalidationText: `1-minute close ${up ? "below" : "above"} ${inval.toFixed(1)} (2.5× ATR against).`,
@@ -135,7 +144,7 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
         horizonMinutes: 40,
         exitRules: ["Time stop at 40 minutes", "Exit on invalidation close", "Scale out at session extreme / +1.5× ATR×3"],
         preferredExpiry: ctx.clock.minutesToClose > 90 ? "0DTE" : "1-3DTE",
-        counterargument: `Trend may already be exhausted: 60m move is ${(Math.abs(b.ret60) * 100).toFixed(2)}% and the last 5m is counter-trend; a failed resumption prints a lower high/higher low.`,
+        counterargument: mtfOk ? `A 5-minute pullback can be the start of a 30-minute reversal; RSI on 30m is ${f30!.rsi14?.toFixed(0) ?? "n/a"} and structure ${f30!.structure}.` : `Trend may already be exhausted: 60m move is ${(Math.abs(b.ret60 ?? 0) * 100).toFixed(2)}% and the last 5m is counter-trend; a failed resumption prints a lower high/higher low.`,
         expiresAt: ctx.asOf + minutes(5),
         priority: 2,
       });

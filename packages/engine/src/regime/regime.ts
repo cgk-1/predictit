@@ -9,6 +9,7 @@ import type { GexSummary } from "../gex/gex";
 import { gexRegimeLabel } from "../gex/gex";
 import type { SessionClock } from "../time/session";
 import type { TickFeatures } from "../features/tick";
+import type { MtfSummary } from "../features/mtf";
 
 export type TrendLabel = "trend-up" | "trend-down" | "range" | "unknown";
 export type StructureLabel = "breakout-up" | "breakout-down" | "failed-breakout-up" | "failed-breakout-down" | "inside-range" | "unknown";
@@ -25,6 +26,8 @@ export interface RegimeAssessment {
   liquidity: LiquidityLabel;
   participation: "unknown" | "broad" | "narrow" | "divergent" | "exhaustion";
   gamma: "positive" | "negative" | "near-flip" | "unknown";
+  /** cross-timeframe alignment (5/10/30-minute trends) */
+  timeframes: MtfSummary["alignment"]["label"];
   eventRisk: { level: "none" | "low" | "medium" | "high"; next: ScheduledEvent | null; minutesUntil: number | null };
   dataConfidence: Confidence;
   evidence: string[];
@@ -41,6 +44,7 @@ export interface RegimeInputs {
   staleness: { spxMs: number | null; chainMs: number | null; barsMs: number | null };
   mode: "LIVE" | "DELAYED" | "REPLAY" | "NONE";
   tick?: TickFeatures;
+  mtf?: MtfSummary | null;
 }
 
 export function assessRegime(i: RegimeInputs): RegimeAssessment {
@@ -60,6 +64,12 @@ export function assessRegime(i: RegimeInputs): RegimeAssessment {
     }
   } else if (b && b.nBars > 0 && b.nBars < 61) {
     ev.push(`Only ${b.nBars} completed bars this session; trend label needs 61.`);
+  }
+  // multi-timeframe corroboration of the trend label
+  const mtfLabel = i.mtf?.alignment.label ?? "n/a";
+  if (i.mtf && mtfLabel !== "n/a") {
+    ev.push(`Timeframes: ${i.mtf.frames.map((f) => `${f.tf}m ${f.trend}`).join(", ")} → ${i.mtf.alignment.text}`);
+    if (trend === "range" && (mtfLabel === "aligned-up" || mtfLabel === "aligned-down")) ev.push("Note: 60-minute efficiency says range while higher timeframes are aligned; treat as a slow trend.");
   }
   // structure relative to the opening range (30m) and session extremes
   let structure: StructureLabel = "unknown";
@@ -137,7 +147,7 @@ export function assessRegime(i: RegimeInputs): RegimeAssessment {
     dataConfidence = "low";
     notes.push({ level: "block", message: "Inputs are too stale to support a new entry." });
   }
-  return { asOf, trend, structure, volatility, rvOverIv, liquidity, participation, gamma, eventRisk: { level, next, minutesUntil }, dataConfidence, evidence: ev, notes };
+  return { asOf, trend, structure, volatility, rvOverIv, liquidity, participation, gamma, timeframes: mtfLabel, eventRisk: { level, next, minutesUntil }, dataConfidence, evidence: ev, notes };
 }
 
 function fmtMs(ms: number | null): string {

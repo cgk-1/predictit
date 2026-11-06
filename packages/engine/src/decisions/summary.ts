@@ -7,6 +7,7 @@ import type { DecisionRecord } from "./decide";
 import type { LeanResult } from "../lean/ensemble";
 import type { SRLevel } from "../features/sr";
 import type { EngineContext } from "./context";
+import type { MtfSummary } from "../features/mtf";
 import { TRADING_MINUTES_PER_YEAR } from "../pricing/tte";
 import { normCdf } from "../pricing/bs";
 
@@ -23,6 +24,7 @@ export interface CleanSummary {
   expectedMove: { toCloseSigmaPts: number | null; horizonMinutes: number | null; toHorizonSigmaPts: number | null; straddleAbsMoveToClose: number | null; source: string };
   /** overnight gap state with the reflection-principle null for a fill (2·(1−Φ(gap/σ_to_close))) */
   gap: { pts: number | null; filled: boolean | null; fillLevel: number | null; nullFillProb: number | null };
+  timeframes: MtfSummary | null;
   calendar: { dayName: string; timeBucket: string; isMonthlyOpex: boolean; isEarlyClose: boolean; priorDayRet: number | null; priorCloseLocation: number | null; weekToDatePct: number | null; priorWeekRet: number | null; coverageDays: number } | null;
   whenToSell: string[];
   support: SRLevel[];
@@ -95,6 +97,7 @@ export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: Lean
     actionText,
     contract,
     expectedMove: { toCloseSigmaPts: toClose, horizonMinutes: horizon, toHorizonSigmaPts: toHorizon, straddleAbsMoveToClose: ctx.spxChain?.straddleAbsMoveToClose ?? null, source: atmIv ? "0DTE ATM implied vol (trading-time), 1σ" : rec.closing ? "closing-window σ (straddle/realized + settlement noise)" : "n/a" },
+    timeframes: ctx.mtf,
     gap: { pts: gapPts, filled: cal?.today.gapFilled ?? null, fillLevel: cal?.today.gapFillLevel ?? null, nullFillProb },
     calendar: cal ? { dayName: cal.dayName, timeBucket: cal.timeBucket, isMonthlyOpex: cal.isMonthlyOpex, isEarlyClose: cal.isEarlyClose, priorDayRet: cal.prior?.ret ?? null, priorCloseLocation: cal.prior?.closeLocation ?? null, weekToDatePct: cal.weekToDatePct, priorWeekRet: cal.priorWeek?.ret ?? null, coverageDays: cal.coverageDays } : null,
     whenToSell,

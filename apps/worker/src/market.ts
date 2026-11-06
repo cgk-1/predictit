@@ -443,7 +443,7 @@ export class MarketSession extends DurableObject<Env> {
       // minute history backfill every 5 min (and on first tick) to seed bars
       if (now - this.lastHistoryFetch >= 5 * 60_000) {
         for (const sym of ["$SPX", "SPY"] as const) {
-          const h = await schwabApi.priceHistory(sym, { periodType: "day", period: 2, frequencyType: "minute", frequency: 1, needExtendedHoursData: false }, o);
+          const h = await schwabApi.priceHistory(sym, { periodType: "day", period: 10, frequencyType: "minute", frequency: 1, needExtendedHoursData: false }, o);
           const bars = parseSchwabHistory(h.raw, h.receivedAt);
           const key = sym === "$SPX" ? "SPX" : "SPY";
           this.mergeBars(key, bars.bars);
@@ -483,7 +483,7 @@ export class MarketSession extends DurableObject<Env> {
     } else if (!last || minute > last.t) {
       bars.push({ t: minute, o: q.last, h: q.last, l: q.last, c: q.last, v: symbol === "SPY" ? q.volume : null });
     }
-    if (bars.length > 2000) bars.splice(0, bars.length - 2000);
+    if (bars.length > 4200) bars.splice(0, bars.length - 4200); // ≈10 sessions of 1-minute bars
     this.liveBars.set(symbol, bars);
   }
 
@@ -538,7 +538,7 @@ export class MarketSession extends DurableObject<Env> {
     if (!persist) return;
     // bound storage growth: chains/bars at most every 30 s (every tick inside the closing window), quotes every 5 s
     const clock = sessionClock(receivedAt);
-    const minGap = clock.inClosingWindow ? 0 : kind.endsWith("Chain") || kind.endsWith("Bars") ? 30_000 : 5_000;
+    const minGap = clock.inClosingWindow ? 0 : kind.endsWith("Bars") ? 60_000 : kind.endsWith("Chain") ? 30_000 : 5_000;
     if (receivedAt - (this.lastPersisted[kind] ?? 0) < minGap) return;
     this.lastPersisted[kind] = receivedAt;
     // Persist a replay-sized slice of chains (near-money, near-term); the broad chain stays in memory for GEX.

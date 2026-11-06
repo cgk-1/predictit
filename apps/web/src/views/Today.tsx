@@ -10,6 +10,7 @@ import { MarketStrip } from "../components/MarketStrip";
 import { Empty, Panel } from "../components/Panel";
 import { PriceChart } from "../components/PriceChart";
 import { RegimePanel } from "../components/RegimePanel";
+import { TimeframesTable } from "../components/Timeframes";
 import { ModeBadge } from "../components/Badges";
 import { SummaryCard } from "../components/SummaryCard";
 import { fmtAgo, fmtTime } from "../lib/format";
@@ -58,6 +59,9 @@ export function TodayView() {
         <div className="grid-2">
           <RegimePanel regime={s.regime} now={now} />
           <LevelsLadder levels={s.levels} spot={spot} spotTime={spotTime} />
+          <Panel title="Timeframes" meta={d?.summary.timeframes ? d.summary.timeframes.alignment.text : "n/a"} className="grid-span-2">
+            <TimeframesTable mtf={d?.summary.timeframes ?? null} />
+          </Panel>
         </div>
         <Panel
           title="SPX, 1-minute"

@@ -11,6 +11,7 @@ import type { PricePoint } from "../features/levels";
 import { calendarFeatures, type CalendarFeatures } from "../features/calendar";
 import { supportResistance, type SRLevel } from "../features/sr";
 import { tickFeatures, type TickFeatures } from "../features/tick";
+import { multiTimeframe, type MtfSummary } from "../features/mtf";
 import { etDate } from "../time/et";
 
 export interface KeyLevel {
@@ -70,6 +71,7 @@ export interface EngineContext {
   calendar: CalendarFeatures | null;
   sr: { support: SRLevel[]; resistance: SRLevel[] };
   tick: TickFeatures;
+  mtf: MtfSummary | null;
   staleness: { spxMs: number | null; chainMs: number | null; barsMs: number | null };
   notes: DataQualityNote[];
   positions: PaperPositionLike[];
@@ -107,7 +109,8 @@ export function buildContext(frame: MarketFrame, settings: EngineSettings = DEFA
     barsMs: frame.spxBars ? asOf - frame.spxBars.stamp.observedAt : null,
   };
   const tick = tickFeatures(frame.tickBars?.bars, frame.tick, asOf);
-  const regime = assessRegime({ clock, spxBars, spyBars, spxChain, gex, events: frame.events ?? [], staleness, mode, tick });
+  const mtf = frame.spxBars ? multiTimeframe(frame.spxBars.bars, asOf) : null;
+  const regime = assessRegime({ clock, spxBars, spyBars, spxChain, gex, events: frame.events ?? [], staleness, mode, tick, mtf });
   const priorCloseRef = frame.priorDay?.close ?? frame.priorClose ?? frame.spxChain?.prevClose ?? null;
   const calendar = frame.spxBars ? calendarFeatures(frame.spxBars.bars, asOf, priorCloseRef) : null;
   const levels = keyLevels(frame, spxBars, spyBars, gex, calendar);
@@ -117,7 +120,7 @@ export function buildContext(frame: MarketFrame, settings: EngineSettings = DEFA
   if (!frame.spxChain) notes.push({ level: "warn", message: "No SPX option chain in this frame." });
   if (!frame.spxBars) notes.push({ level: "warn", message: "No SPX 1-minute bars in this frame." });
   if (calendar && calendar.coverageDays < 2) notes.push({ level: "info", message: "Only today's bars available: prior-day, gap and weekly features are n/a until multi-day history is loaded (Schwab price history)." });
-  return { asOf, today, clock, frame, settings, mode, spxBars, spyBars, spxPath: path, spxChain, gex, regime, levels, calendar, sr, tick, staleness, notes: [...notes, ...regime.notes, ...(spxChain?.notes ?? []), ...(gex?.notes ?? [])], positions };
+  return { asOf, today, clock, frame, settings, mode, spxBars, spyBars, spxPath: path, spxChain, gex, regime, levels, calendar, sr, tick, mtf, staleness, notes: [...notes, ...regime.notes, ...(spxChain?.notes ?? []), ...(gex?.notes ?? [])], positions };
 }
 
 export function keyLevels(frame: MarketFrame, spx: BarFeatures | null, spy: BarFeatures | null, gex: GexSummary | null, cal: CalendarFeatures | null = null): KeyLevel[] {
