@@ -298,48 +298,55 @@ function Schwab({ status: st, now, onChanged }: { status: SchwabStatus; now: num
           </>
         ) : null}
       </dl>
-      <div className="row">
-        <Button kind="primary" onClick={() => void connect()} disabled={!st.configured}>
-          Connect Schwab
-        </Button>
-        <Button kind="danger" onClick={() => void disconnect()} disabled={!st.connected}>
-          Disconnect
-        </Button>
-        <FormStatus status={fs} />
-      </div>
-      {authUrl ? (
-        <p className="small">
-          <a href={authUrl} target="_blank" rel="noopener noreferrer">
-            Open the Schwab login
-          </a>{" "}
-          <span className="muted">(if the tab did not open)</span>
-        </p>
-      ) : null}
-      <p className="small" style={{ maxWidth: "72ch" }}>
-        After logging in, Schwab redirects to <code>https://127.0.0.1:8182/?code=…</code> which will show a browser error — copy the FULL URL from the address bar within 30 seconds and paste it below.
-      </p>
-      <div className="form-grid" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
-        <TextField label="Redirected URL" value={pasted} onChange={setPasted} mono placeholder="https://127.0.0.1:8182/?code=…&session=…" autoComplete="off" />
-      </div>
-      <div className="form-actions">
-        <Button onClick={() => void submitCallback()} disabled={!st.configured}>
-          Submit redirected URL
-        </Button>
-      </div>
       <div className="stack" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-        <h3>Client credentials</h3>
+        <h3>Step 1 — Client credentials</h3>
         <p className="small muted" style={{ maxWidth: "72ch" }}>
-          Use this if the credentials deployed as secrets are wrong or missing (credential source above shows which is active). Stored server-side, never displayed.
+          Paste the Client ID and Client Secret from the Schwab developer portal (App Details → Client ID / Client Secret). They are stored server-side and never displayed. Required before Connect is enabled; use again if the deployed secrets are wrong.
         </p>
         <div className="form-grid">
           <TextField label="Client ID" type="password" value={credId} onChange={setCredId} mono autoComplete="off" />
           <TextField label="Client secret" type="password" value={credSecret} onChange={setCredSecret} mono autoComplete="off" />
         </div>
         <div className="form-actions">
-          <Button onClick={() => void saveCredentials()} disabled={credStatus.kind === "busy"}>
+          <Button onClick={() => void saveCredentials()} disabled={credStatus.kind === "busy" || !credId.trim() || !credSecret.trim()}>
             Save credentials
           </Button>
           <FormStatus status={credStatus} />
+        </div>
+      </div>
+      <div className="stack" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+        <h3>Step 2 — Connect</h3>
+        {!st.configured ? <p className="small form-status-err">Connect is disabled until client credentials are saved (step 1).</p> : null}
+        <div className="row">
+          <Button kind="primary" onClick={() => void connect()} disabled={!st.configured}>
+            Connect Schwab
+          </Button>
+          <Button kind="danger" onClick={() => void disconnect()} disabled={!st.connected}>
+            Disconnect
+          </Button>
+          <FormStatus status={fs} />
+        </div>
+        {authUrl ? (
+          <p className="small">
+            <a href={authUrl} target="_blank" rel="noopener noreferrer">
+              Open the Schwab login
+            </a>{" "}
+            <span className="muted">(if the tab did not open)</span>
+          </p>
+        ) : null}
+      </div>
+      <div className="stack" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+        <h3>Step 3 — Paste the redirected URL</h3>
+        <p className="small" style={{ maxWidth: "72ch" }}>
+          After logging in, Schwab redirects to <code>https://127.0.0.1:8182/?code=…</code> which will show a browser error — copy the FULL URL from the address bar within 30 seconds and paste it below.
+        </p>
+        <div className="form-grid" style={{ gridTemplateColumns: "minmax(0, 1fr)" }}>
+          <TextField label="Redirected URL" value={pasted} onChange={setPasted} mono placeholder="https://127.0.0.1:8182/?code=…&session=…" autoComplete="off" />
+        </div>
+        <div className="form-actions">
+          <Button onClick={() => void submitCallback()} disabled={!st.configured || !pasted.trim()}>
+            Submit redirected URL
+          </Button>
         </div>
       </div>
     </Panel>
