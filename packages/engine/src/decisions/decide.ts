@@ -17,6 +17,7 @@ import { buildSummary, type CleanSummary } from "./summary";
 
 export interface DecisionRecord {
   id: string;
+  instrument: "SPX" | "SPY";
   version: number;
   previousId: string | null;
   asOf: number;
@@ -75,18 +76,20 @@ export function decide(i: DecideInputs): DecisionRecord {
   const passReasons: string[] = [];
   const whyWait: string[] = [];
   const openPositions = i.positions.filter((p) => p.status === "open");
-  const marks = openPositions.map((p) => markPosition(p, ctx.frame.spxChain ?? null, ctx.frame.spx?.last ?? null, asOf));
+  const chainFor = (p: PaperPosition) => (p.root === "SPY" ? ctx.frame.spyChain : ctx.frame.spxChain) ?? null;
+  const spotFor = (p: PaperPosition) => (p.root === "SPY" ? ctx.frame.spy?.last : ctx.frame.spx?.last) ?? null;
+  const marks = openPositions.map((p) => markPosition(p, chainFor(p), spotFor(p), asOf));
 
   // closing window assessment (always computed in/near the window for display)
   let closing: ClosingAssessment | null = null;
-  if (ctx.clock.session.isTradingDay && ctx.clock.minutesToClose <= 20 && ctx.clock.minutesToClose > -5) {
+  if (ctx.instrument === "SPX" && ctx.clock.session.isTradingDay && ctx.clock.minutesToClose <= 20 && ctx.clock.minutesToClose > -5) {
     closing = assessClosingWindow({
       clock: ctx.clock,
       spx: ctx.frame.spx ?? null,
       spy: ctx.frame.spy ?? null,
       es: ctx.frame.es ?? null,
-      path: ctx.spxPath,
-      spyPath: ctx.frame.spyBars ? ctx.frame.spyBars.bars.filter((b) => b.t + 60_000 <= asOf).map((b) => ({ t: b.t + 60_000, p: b.c })) : [],
+      path: ctx.path,
+      spyPath: ctx.companion.path,
       esPath: [],
       chain: ctx.frame.spxChain ?? null,
       mode: ctx.mode,
@@ -141,9 +144,9 @@ export function decide(i: DecideInputs): DecisionRecord {
     }
   } else if (!openPositions.length) {
     // rank contracts whenever a triggered setup and a chain exist — also under PASS, for study (never executable)
-    if (primary && primary.lifecycle === "triggered" && ctx.frame.spxChain) {
-      const chains: Array<{ chain: typeof ctx.frame.spxChain; levelScale: number }> = [{ chain: ctx.frame.spxChain, levelScale: 1 }];
-      if (ctx.frame.spyChain && ctx.frame.spx && ctx.frame.spy && ctx.frame.spx.last > 0) chains.push({ chain: ctx.frame.spyChain, levelScale: ctx.frame.spy.last / ctx.frame.spx.last });
+    if (primary && primary.lifecycle === "triggered" && ctx.chainSnapshot) {
+      // native chain only: SPX and SPY diverge intraday, so no level arithmetic across instruments
+      const chains: Array<{ chain: typeof ctx.chainSnapshot; levelScale: number }> = [{ chain: ctx.chainSnapshot, levelScale: 1 }];
       const rk: RankingResult = rankAcrossChains({
         asOf,
         today: ctx.today,
@@ -161,7 +164,7 @@ export function decide(i: DecideInputs): DecisionRecord {
       rankingAssumptions = rk.assumptions;
     }
     if (passReasons.length) state = "PASS";
-    else if (primary && primary.lifecycle === "triggered" && ctx.frame.spxChain) {
+    else if (primary && primary.lifecycle === "triggered" && ctx.chainSnapshot) {
       const eligible = contracts.filter((c) => c.eligible);
       if (!eligible.length) {
         state = "PASS";
@@ -184,11 +187,12 @@ export function decide(i: DecideInputs): DecisionRecord {
 
   const prevId = i.previous?.id ?? null;
   const version = (i.previous?.version ?? 0) + 1;
-  const inputsDigest = digest([asOf, ctx.frame.spx?.last, ctx.frame.spx?.quoteTime, ctx.frame.spxChain?.stamp.observedAt, ctx.frame.spxBars?.stamp.observedAt, state, primary?.id, contracts[0]?.osi, closing?.recommendation.contract?.osi]);
+  const inputsDigest = digest([ctx.instrument, asOf, ctx.quote?.last, ctx.quote?.quoteTime, ctx.chainSnapshot?.stamp.observedAt, ctx.staleness.barsMs, state, primary?.id, contracts[0]?.osi, closing?.recommendation.contract?.osi]);
   const ttl = ctx.clock.inClosingWindow ? 20_000 : primary ? Math.min(primary.expiresAt - asOf, 5 * 60_000) : 60_000;
   const lean = computeLean(ctx, ctx.calendar, i.weights ?? initialWeights(asOf));
   const partial = {
-    id: `dec_${ctx.today}_${asOf}_${inputsDigest}`,
+    id: `dec_${ctx.instrument}_${ctx.today}_${asOf}_${inputsDigest}`,
+    instrument: ctx.instrument,
     version,
     previousId: prevId,
     asOf,
@@ -268,12 +272,12 @@ export function diffDecisions(prev: DecisionRecord | null, next: DecisionRecord,
     const pf = prevCtx.gex?.flip.level;
     const nf = ctx.gex?.flip.level;
     if (pf && nf && Math.abs(nf - pf) > 5) ev.push({ at, kind: "gex", text: `${t} Zero-gamma estimate moved ${pf.toFixed(0)} → ${nf.toFixed(0)}.` });
-    const ps = prevCtx.frame.spx?.last;
-    const ns = ctx.frame.spx?.last;
+    const ps = prevCtx.quote?.last;
+    const ns = ctx.quote?.last;
     if (ps && ns) {
       for (const l of ctx.levels) {
         if (l.kind === "round") continue;
-        if ((ps < l.level && ns >= l.level) || (ps > l.level && ns <= l.level)) ev.push({ at, kind: "level", text: `${t} SPX crossed ${l.label} ${l.level.toFixed(1)} (${ns > l.level ? "above" : "below"}).` });
+        if ((ps < l.level && ns >= l.level) || (ps > l.level && ns <= l.level)) ev.push({ at, kind: "level", text: `${t} ${ctx.instrument} crossed ${l.label} ${l.level.toFixed(ctx.instrument === "SPY" ? 2 : 1)} (${ns > l.level ? "above" : "below"}).` });
       }
     }
   }

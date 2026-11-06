@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { etParts, etToMs, type ScheduledEvent } from "@predictit/engine";
 import { api, type SettingsPatch } from "../api/client";
 import { useServer, useServerNow } from "../api/context";
-import type { AppSettings, SchwabStatus } from "../api/types";
+import type { AlertsStatus, AppSettings, SchwabStatus } from "../api/types";
 import { Button, FormStatus, NumberField, SelectField, TextField, Toggle, type FormStatusValue } from "../components/Form";
 import { FeedHealthTable } from "../components/FeedHealth";
 import { Empty, Panel } from "../components/Panel";
@@ -379,6 +379,119 @@ function Account() {
   );
 }
 
+const ALERT_KEYS = { notify: "pi_alert_notify", beep: "pi_alert_beep" } as const;
+
+function readLocalFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeLocalFlag(key: string, v: boolean) {
+  try {
+    if (v) localStorage.setItem(key, "1");
+    else localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable: the toggle simply does not persist */
+  }
+}
+
+/** Alerts: tab-title prefix is always on; browser notification + beep are per-browser; Discord is server-side and write-only. */
+function Alerts({ now }: { now: number }) {
+  const [status, setStatus] = useState<AlertsStatus | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [url, setUrl] = useState("");
+  const [fs, setFs] = useState<FormStatusValue>({ kind: "idle" });
+  const [notify, setNotify] = useState(() => readLocalFlag(ALERT_KEYS.notify));
+  const [beep, setBeep] = useState(() => readLocalFlag(ALERT_KEYS.beep));
+  const [perm, setPerm] = useState<string>(() => (typeof Notification !== "undefined" ? Notification.permission : "unsupported"));
+
+  const refresh = () => {
+    api
+      .alertsStatus()
+      .then((a) => {
+        setStatus(a);
+        setLoadErr(null);
+      })
+      .catch((e: Error) => setLoadErr(e.message));
+  };
+  useEffect(refresh, []);
+
+  const save = async (value: string) => {
+    setFs({ kind: "busy", text: value ? "Saving webhook…" : "Clearing webhook…" });
+    try {
+      const a = await api.setDiscordWebhook(value);
+      setStatus(a);
+      setUrl("");
+      setFs({ kind: "ok", text: value ? "Saved. A test line was posted to the channel." : "Cleared." });
+    } catch (e) {
+      setFs({ kind: "err", text: (e as Error).message });
+    }
+  };
+
+  const toggleNotify = async (v: boolean) => {
+    if (v && typeof Notification !== "undefined" && Notification.permission !== "granted") {
+      const p = await Notification.requestPermission();
+      setPerm(p);
+      if (p !== "granted") {
+        setNotify(false);
+        writeLocalFlag(ALERT_KEYS.notify, false);
+        return;
+      }
+    }
+    setNotify(v);
+    writeLocalFlag(ALERT_KEYS.notify, v);
+  };
+
+  return (
+    <Panel title="Alerts">
+      <p className="small muted" style={{ maxWidth: "72ch" }}>
+        Every alert is a setup change: BUY CALL / BUY PUT / MANAGE starts, or a setup switching off. WAIT↔PASS flips are never alerted. The tab title always shows the current action; the options below add a browser notification, a short beep, or a Discord message.
+      </p>
+      <div className="form-grid">
+        <Toggle label="Browser notification" checked={notify} onChange={(v) => void toggleNotify(v)} help={perm === "unsupported" ? "not supported in this browser" : perm === "denied" ? "blocked in browser settings" : "this browser only; needs the tab open"} />
+        <Toggle
+          label="Beep on change"
+          checked={beep}
+          onChange={(v) => {
+            setBeep(v);
+            writeLocalFlag(ALERT_KEYS.beep, v);
+          }}
+          help="this browser only"
+        />
+      </div>
+      <div className="stack" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+        <h3>Discord webhook</h3>
+        <dl className="kv">
+          <dt>Status</dt>
+          <dd className="prose">
+            {loadErr ? <span className="form-status-err">{loadErr}</span> : status ? status.discord ? <span className="chip chip-ok">configured</span> : <span className="chip">off</span> : "…"}
+            {status?.lastSentAt ? <span className="small muted"> · last sent {fmtTime(status.lastSentAt)} ET ({fmtAgo(now - status.lastSentAt)})</span> : null}
+            {status?.lastError ? <span className="small form-status-err"> · last error: {status.lastError}</span> : null}
+          </dd>
+        </dl>
+        <p className="small muted" style={{ maxWidth: "72ch" }}>
+          Create a webhook in Discord (channel → Edit → Integrations → Webhooks) and paste its URL. It is stored server-side and never displayed. One line per setup change, for SPX and SPY, tagged LIVE or DELAYED.
+        </p>
+        <div className="form-grid">
+          <TextField label="Webhook URL" type="password" value={url} onChange={setUrl} mono autoComplete="off" />
+        </div>
+        <div className="form-actions">
+          <Button onClick={() => void save(url)} disabled={fs.kind === "busy" || !url.trim()}>
+            Save webhook
+          </Button>
+          <Button kind="danger" onClick={() => void save("")} disabled={fs.kind === "busy" || !status?.discord}>
+            Remove
+          </Button>
+          <FormStatus status={fs} />
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 export function SettingsView({ theme, setTheme }: { theme: Theme; setTheme: (t: Theme) => void }) {
   const conn = useServer();
   const now = useServerNow();
@@ -429,6 +542,7 @@ export function SettingsView({ theme, setTheme }: { theme: Theme; setTheme: (t: 
         <p className="xs muted">Only the theme choice is kept in this browser; nothing else is stored locally.</p>
       </Panel>
       {s ? <Schwab status={s.schwab} now={now} onChanged={() => conn.refresh()} /> : null}
+      <Alerts now={now} />
       <Panel title="Feed health" meta={s ? <span>server time {fmtTime(s.serverTime)} ET</span> : undefined}>
         {s ? <FeedHealthTable feeds={s.feeds} now={now} /> : <p className="muted small">Waiting for state…</p>}
         {s?.lastTick ? (

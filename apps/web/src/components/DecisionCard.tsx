@@ -69,7 +69,7 @@ export function DecisionCard({ decision: d, now, id = "decision-record" }: { dec
           </span>
           <span>decision v{d.version}</span>
           <span>{fmtTime(d.asOf)} ET</span>
-          <span aria-live="polite">
+          <span>
             <Countdown target={d.expiresAt} now={now} />
           </span>
         </>

@@ -117,8 +117,13 @@ export interface MarketFrame {
   spyBars?: BarSeries;
   /** 1-minute TICK bars built from quotes (h/l = max/min TICK in the minute) */
   tickBars?: BarSeries;
+  /** other indices/ETFs (NDX, RUT, DJI, QQQ, IWM, RSP, VIX): 1-minute bars built from quotes + last */
+  indices?: Record<string, { bars: Bar1m[]; last?: number }>;
   spxChain?: ChainSnapshot;
   spyChain?: ChainSnapshot;
+  /** wider-strike / longer-dated chains refreshed less often, used for GEX only (execution uses the near chains) */
+  spxChainBroad?: ChainSnapshot;
+  spyChainBroad?: ChainSnapshot;
   /** Prior-day reference levels (observed before today's open). */
   priorDay?: { date: string; high: number; low: number; close: number; settlementSET?: number };
   /** Prior close alone (when a full prior-day summary is not available). */

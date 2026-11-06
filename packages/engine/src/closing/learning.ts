@@ -101,7 +101,7 @@ export interface ClosingLearnConfig {
   bounds: { seasonality: [number, number]; drift: [number, number]; noise: [number, number]; trust: [number, number] };
 }
 
-export const DEFAULT_CLOSING_LEARN: ClosingLearnConfig = { minN: 10, step: 0.2, bounds: { seasonality: [1, 3], drift: [0, 1], noise: [0.5, 5], trust: [0.5, 1.5] } };
+export const DEFAULT_CLOSING_LEARN: ClosingLearnConfig = { minN: 30, step: 0.2, bounds: { seasonality: [1, 3], drift: [0, 1], noise: [0.5, 5], trust: [0.5, 1.5] } };
 
 /** Fold one grade into the learner (pure). Only one grade per decision should be folded; prefer the official one. */
 export function updateClosingLearner(st: ClosingLearnerState, g: ClosingGrade, base: ClosingSettings, cfg: ClosingLearnConfig = DEFAULT_CLOSING_LEARN): ClosingLearnerState {
@@ -147,7 +147,7 @@ export function updateClosingLearner(st: ClosingLearnerState, g: ClosingGrade, b
     s.learned.settlementNoisePts = clamp(cur + cfg.step * (clamp(rmsGap, cfg.bounds.noise) - cur), cfg.bounds.noise);
   }
   for (const [pat, e] of Object.entries(s.patterns)) {
-    if (e.n < 20) continue; // need a real sample before trusting or distrusting a pattern
+    if (e.n < 30) continue; // sessions, not records: need a real sample before trusting or distrusting a pattern
     const w = wilson(e.hits, e.n);
     // trust = 1 at 50% hit rate; scaled by how far the lower/upper bound sits from 50%
     const trust = w.lo > 0.5 ? 1 + (w.lo - 0.5) : w.hi < 0.5 ? 1 - (0.5 - w.hi) : 1;
@@ -155,6 +155,27 @@ export function updateClosingLearner(st: ClosingLearnerState, g: ClosingGrade, b
   }
   s.updatedAt = g.decidedAt;
   return s;
+}
+
+/**
+ * Rebuild the learner from the full grade ledger so each SESSION counts once: for every date pick the official grade
+ * when available, otherwise the provisional one, choosing the record decided nearest 15:56 ET (middle of the window).
+ * Recomputing from the ledger (instead of folding every record) is what makes `n` mean sessions.
+ */
+export function learnerFromGrades(grades: ClosingGrade[], base: ClosingSettings, dateOf: (ms: number) => string, minuteOfDay: (ms: number) => number, cfg: ClosingLearnConfig = DEFAULT_CLOSING_LEARN): ClosingLearnerState {
+  const byDate = new Map<string, ClosingGrade[]>();
+  for (const g of grades) {
+    const d = dateOf(g.decidedAt);
+    byDate.set(d, [...(byDate.get(d) ?? []), g]);
+  }
+  let st = initialClosingLearner(0);
+  for (const d of [...byDate.keys()].sort()) {
+    const gs = byDate.get(d)!;
+    const pool = gs.some((g) => g.official) ? gs.filter((g) => g.official) : gs;
+    const pick = pool.reduce((a, b) => (Math.abs(minuteOfDay(b.decidedAt) - (15 * 60 + 56)) < Math.abs(minuteOfDay(a.decidedAt) - (15 * 60 + 56)) ? b : a));
+    st = updateClosingLearner(st, pick, base, cfg);
+  }
+  return st;
 }
 
 /** Closing settings with learned parameters applied (bounded by construction). */
@@ -182,6 +203,6 @@ export function closingLearnerSummary(st: ClosingLearnerState | null, base: Clos
     patterns: Object.fromEntries(Object.entries(s.patterns).map(([k, e]) => [k, { n: e.n, hitRate: e.n ? e.hits / e.n : null, ci: e.n ? ([wilson(e.hits, e.n).lo, wilson(e.hits, e.n).hi] as [number, number]) : null, trust: s.learned.patternTrust[k] ?? 1 }])),
     subWindows: Object.fromEntries(Object.entries(s.subWindows).map(([k, e]) => [k, { n: e.n, avgPnlUsd: e.n ? e.pnl / e.n : null, hitRate: e.n ? e.hits / e.n : null }])),
     parameters: { seasonalityMultiplier: applied.seasonalityMultiplier, driftPersistence: applied.driftPersistence, settlementNoisePts: applied.settlementNoisePts, base: { seasonalityMultiplier: base.seasonalityMultiplier, driftPersistence: base.driftPersistence, settlementNoisePts: base.settlementNoisePts } },
-    note: s.n < DEFAULT_CLOSING_LEARN.minN ? `Learned parameters apply after ${DEFAULT_CLOSING_LEARN.minN} graded sessions (currently ${s.n}); pattern trust after 20 outcomes per pattern.` : "Parameters adapt within hard bounds from graded sessions; grades are prospective, not validation.",
+    note: s.n < DEFAULT_CLOSING_LEARN.minN ? `Learned parameters apply after ${DEFAULT_CLOSING_LEARN.minN} graded sessions (currently ${s.n}; one record per session, official close preferred); pattern trust after 30 sessions per pattern.` : "Parameters adapt within hard bounds from graded sessions (one per session); grades are prospective, not validation.",
   };
 }

@@ -51,7 +51,7 @@ describe("ensemble lean", () => {
     expect(r.scored[0]!.hit).toBe(true);
     // hammer 500 wrong outcomes: weight floors at minMult × prior, never below
     let w = r.weights;
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 650; i++) {
       const p = makePredictions({ asOf: 2_000_000 + i * 60_000, weightsMode: "prior (burn-in)", score: 0.6, direction: "UP", strength: "strong", agreement: 1, available: 1, votes: [{ id: "mom15", vote: 1, reason: "", weight: 1, contribution: 1, label: "", family: "momentum", evidence: "B" }], top: [], against: [], validation: "unvalidated" }, 7400)[0]!;
       w = scorePredictions([p], [{ t: p.dueAt + 1000, p: 7390 }], p.dueAt + 2000, w).weights;
     }
@@ -59,7 +59,7 @@ describe("ensemble lean", () => {
     expect(w.w["mom15"]!).toBeGreaterThanOrEqual(DEFAULT_ENSEMBLE_CONFIG.minMult * spec.priorWeight - 1e-9);
     expect(w.w["mom15"]!).toBeLessThan(spec.priorWeight);
     const st = leanStats(w);
-    expect(st.horizons["15m"]!.n).toBe(501);
+    expect(st.horizons["15m"]!.n).toBe(651);
     expect(st.calibratedProbabilityAvailable).toBe(true);
     expect(st.indicators.find((i) => i.id === "mom15")!.hitRate!).toBeLessThan(0.01);
   });

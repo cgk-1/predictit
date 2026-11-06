@@ -12,8 +12,8 @@ const ev = (ctx: EngineContext, label: string, value: string, at?: number): Evid
   label,
   value,
   at: at ?? ctx.asOf,
-  source: ctx.frame.spx?.stamp.source ?? "replay",
-  mode: ctx.frame.spx?.stamp.mode ?? "REPLAY",
+  source: ctx.quote?.stamp.source ?? "replay",
+  mode: ctx.quote?.stamp.mode ?? "REPLAY",
 });
 
 export const STRATEGY_META: Record<string, StrategyMeta> = {
@@ -70,7 +70,7 @@ export const STRATEGY_META: Record<string, StrategyMeta> = {
     name: "Afternoon continuation / reversal",
     phases: ["afternoon", "final-hour"],
     validation: "unvalidated",
-    hypothesis: "The day's direction continues into the last hour when dealer gamma is negative (intraday momentum); it reverts when gamma is positive.",
+    hypothesis: "The rest-of-day return continues into the last hour when dealer gamma is negative (Baltussen et al. 2021); under positive gamma there is no documented predictability, so the family waits.",
     dataRequirements: ["SPX bars", "GEX regime"],
   },
   "eod-auction": {
@@ -102,11 +102,11 @@ function minutes(n: number): number {
 
 export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
   const out: StrategyOutput = { candidates: [], waits: [] };
-  const b = ctx.spxBars;
+  const b = ctx.bars;
   const phase = ctx.clock.phase;
-  const last = b?.last ?? ctx.frame.spx?.last ?? null;
+  const last = b?.last ?? ctx.quote?.last ?? null;
   if (!b || last === null || !ctx.clock.isRegularSession) {
-    out.waits.push({ family: "trend-pullback", reason: ctx.clock.isRegularSession ? "No SPX bar data." : "Outside the regular session." });
+    out.waits.push({ family: "trend-pullback", reason: ctx.clock.isRegularSession ? `No ${ctx.instrument} bar data.` : "Outside the regular session." });
     return out;
   }
   const atr = b.atr14 ?? 2;
@@ -155,8 +155,8 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
   if (phase === "morning" && b.or30?.complete) {
     const { high, low } = b.or30;
     const w = high - low;
-    const orH = levelInteraction(ctx.spxPath, high, ctx.asOf, { ...DEFAULT_LEVEL_OPTS, lookbackMs: 20 * 60_000 });
-    const orL = levelInteraction(ctx.spxPath, low, ctx.asOf, { ...DEFAULT_LEVEL_OPTS, lookbackMs: 20 * 60_000 });
+    const orH = levelInteraction(ctx.path, high, ctx.asOf, { ...DEFAULT_LEVEL_OPTS, lookbackMs: 20 * 60_000 });
+    const orL = levelInteraction(ctx.path, low, ctx.asOf, { ...DEFAULT_LEVEL_OPTS, lookbackMs: 20 * 60_000 });
     const mk = (dir: "call" | "put", kind: "breakout" | "failure", lvl: number, li: typeof orH) =>
       out.candidates.push({
         ...base(ctx, "orb", dir, `${kind}-${lvl.toFixed(0)}`),
@@ -196,7 +196,7 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
       else {
         const dir = nearHigh ? "put" : "call";
         const lvl = nearHigh ? b.sessHigh : b.sessLow;
-        const li = levelInteraction(ctx.spxPath, lvl, ctx.asOf);
+        const li = levelInteraction(ctx.path, lvl, ctx.asOf);
         const rejected = li.pattern === "rejection" || li.pattern === "failed-break";
         out.candidates.push({
           ...base(ctx, "range-rejection", dir, nearHigh ? "high" : "low"),
@@ -223,7 +223,7 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
     if (b.compression15 === null) wait("compression-expansion", "Needs ≥30 completed bars.");
     else if (b.compression15 > 0.55) wait("compression-expansion", `No compression (15m range ratio ${b.compression15.toFixed(2)}).`);
     else {
-      const sess = ctx.frame.spxBars ? ctx.frame.spxBars.bars.filter((x) => x.t + 60_000 <= ctx.asOf).slice(-15) : [];
+      const sess = ctx.rawBars.filter((x) => x.t + 60_000 <= ctx.asOf).slice(-15);
       const boxH = Math.max(...sess.map((x) => x.h));
       const boxL = Math.min(...sess.map((x) => x.l));
       const brokeUp = last > boxH;
@@ -256,7 +256,7 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
     const near = ctx.levels.filter((l) => l.kind !== "round" && Math.abs(l.level / last - 1) <= 0.004);
     if (!near.length) wait("level-reclaim-reject", "No key level within 0.4% of price.");
     for (const l of near.slice(0, 4)) {
-      const li = levelInteraction(ctx.spxPath, l.level, ctx.asOf);
+      const li = levelInteraction(ctx.path, l.level, ctx.asOf);
       let dir: "call" | "put" | null = null;
       let lifecycle: SetupCandidate["lifecycle"] = "forming";
       if (li.pattern === "reclaim" || li.pattern === "break-hold") {
@@ -296,20 +296,20 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
 
   // 6. Momentum + participation (NYSE TICK when live; SPY agreement as a weak proxy otherwise)
   if (STRATEGY_META["momentum-participation"]!.phases.includes(phase)) {
-    const s = ctx.spyBars;
+    const s = ctx.companion.bars;
     const tk = ctx.tick;
     const tickLive = tk.label !== "n/a" && tk.avg10 !== null;
-    if (b.ret15 === null || (!tickLive && (!s || s.ret15 === null))) wait("momentum-participation", "Needs NYSE TICK (Schwab live) or SPY bars.");
+    if (b.ret15 === null || (!tickLive && (!s || s.ret15 === null))) wait("momentum-participation", `Needs NYSE TICK (Schwab live) or ${ctx.companion.instrument} bars.`);
     else if (Math.abs(b.ret15) < 0.002) wait("momentum-participation", `15m SPX move ${(b.ret15 * 100).toFixed(2)}% below 0.20% threshold.`);
     else if (tickLive && ((b.ret15 > 0 && tk.label !== "broad-up") || (b.ret15 < 0 && tk.label !== "broad-down"))) wait("momentum-participation", `TICK does not show broad participation (${tk.label}, 10-min avg ${tk.avg10!.toFixed(0)}).`);
-    else if (!tickLive && s && s.ret15 !== null && Math.sign(s.ret15) !== Math.sign(b.ret15)) wait("momentum-participation", "SPY does not confirm SPX direction (no TICK).");
+    else if (!tickLive && s && s.ret15 !== null && Math.sign(s.ret15) !== Math.sign(b.ret15)) wait("momentum-participation", `${ctx.companion.instrument} does not agree in sign (no TICK).`);
     else {
       const dir = b.ret15 > 0 ? "call" : "put";
       out.candidates.push({
         ...base(ctx, "momentum-participation", dir, "15m"),
         lifecycle: "triggered",
-        evidence: tickLive ? [ev(ctx, "SPX 15m", `${(b.ret15 * 100).toFixed(2)}%`), ev(ctx, "NYSE TICK", tk.text)] : [ev(ctx, "SPX 15m", `${(b.ret15 * 100).toFixed(2)}%`), ev(ctx, "SPY 15m", `${((s?.ret15 ?? 0) * 100).toFixed(2)}%`)],
-        triggerCondition: tickLive ? "15m SPX move ≥0.20% with broad NYSE TICK participation in the same direction." : "15m SPX move ≥0.20% with SPY same sign (weak proxy; TICK unavailable).",
+        evidence: tickLive ? [ev(ctx, `${ctx.instrument} 15m`, `${(b.ret15 * 100).toFixed(2)}%`), ev(ctx, "NYSE TICK", tk.text)] : [ev(ctx, `${ctx.instrument} 15m`, `${(b.ret15 * 100).toFixed(2)}%`), ev(ctx, `${ctx.companion.instrument} 15m`, `${((s?.ret15 ?? 0) * 100).toFixed(2)}%`)],
+        triggerCondition: tickLive ? `15m ${ctx.instrument} move ≥0.20% with broad NYSE TICK participation in the same direction.` : `15m ${ctx.instrument} move ≥0.20% with ${ctx.companion.instrument} same sign (weak proxy; TICK unavailable).`,
         entryZone: dir === "call" ? { low: last - atr, high: last + atr } : { low: last - atr, high: last + atr },
         invalidationLevel: dir === "call" ? last - 2 * atr : last + 2 * atr,
         invalidationText: "Give-back of 2× ATR from entry.",
@@ -318,7 +318,7 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
         exitRules: ["Time stop 25 min", "Trail by 1.5× ATR after +2× ATR"],
         preferredExpiry: "0DTE",
         counterargument: tickLive ? "Short-horizon momentum mean-reverts often; TICK extremes above +1000 / below −1000 can mark exhaustion rather than continuation." : "Short-horizon momentum in index futures mean-reverts at 15-30 minute horizons in many samples; without breadth this is a weak proxy.",
-        dataNotes: tickLive ? [] : [{ level: "warn", message: "NYSE TICK unavailable; SPY sign agreement used as proxy." }],
+        dataNotes: tickLive ? [] : [{ level: "warn", message: `NYSE TICK unavailable; ${ctx.companion.instrument} sign agreement used as proxy.` }],
         expiresAt: ctx.asOf + minutes(5),
         priority: 3,
       });
@@ -330,16 +330,18 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
     const open = b.sessOpen;
     if (open === null || ctx.regime.gamma === "unknown") wait("afternoon-continuation-reversal", "Needs session open and a GEX regime.");
     else {
-      const dayRet = last / open - 1;
-      if (Math.abs(dayRet) < 0.003) wait("afternoon-continuation-reversal", `Day move ${(dayRet * 100).toFixed(2)}% too small (<0.30%).`);
+      const anchor = ctx.calendar?.prior?.close ?? open; // rest-of-day return from the prior close when known (Baltussen)
+      const dayRet = last / anchor - 1;
+      if (ctx.regime.gamma !== "negative") wait("afternoon-continuation-reversal", `Gamma ${ctx.regime.gamma}: continuation evidence exists only under negative dealer gamma.`);
+      else if (Math.abs(dayRet) < 0.003) wait("afternoon-continuation-reversal", `Rest-of-day move ${(dayRet * 100).toFixed(2)}% too small (<0.30%).`);
       else {
-        const continuation = ctx.regime.gamma === "negative";
-        const dir = (dayRet > 0) === continuation ? "call" : "put";
+        const continuation = true;
+        const dir = dayRet > 0 ? "call" : "put";
         out.candidates.push({
           ...base(ctx, "afternoon-continuation-reversal", dir, continuation ? "cont" : "rev"),
           lifecycle: ctx.clock.phase === "final-hour" ? "triggered" : "armed",
           evidence: [ev(ctx, "Day move (open→now)", `${(dayRet * 100).toFixed(2)}%`), ev(ctx, "Gamma regime", ctx.regime.gamma)],
-          triggerCondition: continuation ? "Negative-gamma day: continue the day's direction from 15:00." : "Positive-gamma day: fade the day's direction from 15:00.",
+          triggerCondition: continuation ? "Negative-gamma session: continue the rest-of-day direction (prior close → now) from 15:00." : "",
           entryZone: { low: last - atr, high: last + atr },
           invalidationLevel: dir === "call" ? last - 2.5 * atr : last + 2.5 * atr,
           invalidationText: "2.5× ATR against entry.",

@@ -8,11 +8,13 @@ import type { LeanResult } from "../lean/ensemble";
 import type { SRLevel } from "../features/sr";
 import type { EngineContext } from "./context";
 import type { MtfSummary } from "../features/mtf";
+import type { CrossFeatures } from "../features/cross";
 import { TRADING_MINUTES_PER_YEAR } from "../pricing/tte";
 import { normCdf } from "../pricing/bs";
 
 export interface CleanSummary {
   asOf: number;
+  instrument: "SPX" | "SPY";
   headline: string;
   direction: "UP" | "DOWN" | "NEUTRAL";
   strength: LeanResult["strength"];
@@ -21,10 +23,11 @@ export interface CleanSummary {
   action: "BUY CALL" | "BUY PUT" | "WAIT" | "PASS" | "MANAGE";
   actionText: string;
   contract: { instrument: "SPX" | "SPY"; osi: string; label: string; bid: number; ask: number; riskUsd: number; breakeven: number; entryCondition: string } | null;
-  expectedMove: { toCloseSigmaPts: number | null; horizonMinutes: number | null; toHorizonSigmaPts: number | null; straddleAbsMoveToClose: number | null; source: string };
+  expectedMove: { toCloseSigmaPts: number | null; horizonMinutes: number | null; toHorizonSigmaPts: number | null; straddleAbsMoveToClose: number | null; /** |spot − open| as a share of the open-anchored 1σ full-session move (null without IV) */ consumedPct: number | null; source: string };
   /** overnight gap state with the reflection-principle null for a fill (2·(1−Φ(gap/σ_to_close))) */
   gap: { pts: number | null; filled: boolean | null; fillLevel: number | null; nullFillProb: number | null };
   timeframes: MtfSummary | null;
+  cross: CrossFeatures;
   calendar: { dayName: string; timeBucket: string; isMonthlyOpex: boolean; isEarlyClose: boolean; priorDayRet: number | null; priorCloseLocation: number | null; weekToDatePct: number | null; priorWeekRet: number | null; coverageDays: number } | null;
   whenToSell: string[];
   support: SRLevel[];
@@ -35,9 +38,9 @@ export interface CleanSummary {
 }
 
 export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: LeanResult, sr: { support: SRLevel[]; resistance: SRLevel[] }): CleanSummary {
-  const spot = ctx.frame.spx?.last ?? ctx.spxBars?.last ?? null;
-  const atmIv = ctx.spxChain?.front?.atmIv ?? null;
-  const toClose = ctx.spxChain?.expectedMoveToClose ?? null;
+  const spot = ctx.quote?.last ?? ctx.bars?.last ?? null;
+  const atmIv = ctx.chain?.front?.atmIv ?? null;
+  const toClose = ctx.chain?.expectedMoveToClose ?? null;
   const horizon = rec.primary?.horizonMinutes ?? (rec.closing ? Math.round(rec.closing.remaining.sec / 60) : null);
   const toHorizon = atmIv && spot && horizon ? spot * atmIv * Math.sqrt(horizon / TRADING_MINUTES_PER_YEAR) : rec.closing ? rec.closing.remaining.sigmaUsedPts : null;
   let action: CleanSummary["action"] = "WAIT";
@@ -59,7 +62,7 @@ export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: Lean
     } else {
       const c = rec.contracts.find((x) => x.eligible) ?? rec.contracts[0];
       if (c && rec.primary) {
-        contract = { instrument: c.instrument, osi: c.osi, label: `${c.root} ${c.expiry} ${c.strike}${c.right} (Δ ${c.delta?.toFixed(2) ?? "n/a"})`, bid: c.bid, ask: c.ask, riskUsd: c.riskUsd, breakeven: c.breakevenAtExpiry, entryCondition: rec.primary.entryZone ? `Enter while SPX is in ${rec.primary.entryZone.low.toFixed(1)}–${rec.primary.entryZone.high.toFixed(1)}; ${rec.primary.triggerCondition}` : rec.primary.triggerCondition };
+        contract = { instrument: c.instrument, osi: c.osi, label: `${c.root} ${c.expiry} ${c.strike}${c.right} (Δ ${c.delta?.toFixed(2) ?? "n/a"})`, bid: c.bid, ask: c.ask, riskUsd: c.riskUsd, breakeven: c.breakevenAtExpiry, entryCondition: rec.primary.entryZone ? `Enter while ${ctx.instrument} is in ${rec.primary.entryZone.low.toFixed(ctx.instrument === "SPY" ? 2 : 1)}–${rec.primary.entryZone.high.toFixed(ctx.instrument === "SPY" ? 2 : 1)}; ${rec.primary.triggerCondition}` : rec.primary.triggerCondition };
         actionText = `${action} — ${rec.primary.name} (${rec.primary.lifecycle}); risk $${c.riskUsd.toFixed(0)}/contract at the ask.`;
         whenToSell.push(...rec.primary.exitRules);
         whenToSell.push(`Invalidation: ${rec.primary.invalidationText}`);
@@ -84,10 +87,15 @@ export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: Lean
   const why = [...lean.top];
   if (rec.primary) why.push(`${rec.primary.name}: ${rec.primary.evidence.map((e) => `${e.label} ${e.value}`).join("; ")}`);
   const cal = ctx.calendar;
+  // open-anchored expected move for the whole session (1σ) and how much of it the day has already used
+  const sessionLen = ctx.clock.session.equityCloseMin - ctx.clock.session.equityOpenMin;
+  const fullDaySigma = atmIv && spot ? spot * atmIv * Math.sqrt(sessionLen / TRADING_MINUTES_PER_YEAR) : null;
+  const consumed = fullDaySigma && spot && ctx.bars?.sessOpen ? Math.abs(spot - ctx.bars.sessOpen) / fullDaySigma : null;
   const gapPts = cal?.today.gapPts ?? null;
   const nullFillProb = gapPts !== null && gapPts !== 0 && toClose && toClose > 0 && cal?.today.gapFilled === false ? 2 * (1 - normCdf(Math.abs(gapPts) / toClose)) : cal?.today.gapFilled ? 1 : null;
   return {
     asOf: ctx.asOf,
+    instrument: ctx.instrument,
     headline,
     direction: lean.direction,
     strength: lean.strength,
@@ -96,8 +104,9 @@ export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: Lean
     action,
     actionText,
     contract,
-    expectedMove: { toCloseSigmaPts: toClose, horizonMinutes: horizon, toHorizonSigmaPts: toHorizon, straddleAbsMoveToClose: ctx.spxChain?.straddleAbsMoveToClose ?? null, source: atmIv ? "0DTE ATM implied vol (trading-time), 1σ" : rec.closing ? "closing-window σ (straddle/realized + settlement noise)" : "n/a" },
+    expectedMove: { toCloseSigmaPts: toClose, horizonMinutes: horizon, toHorizonSigmaPts: toHorizon, straddleAbsMoveToClose: ctx.chain?.straddleAbsMoveToClose ?? null, consumedPct: consumed, source: atmIv ? "0DTE ATM implied vol (trading-time), 1σ" : rec.closing ? "closing-window σ (straddle/realized + settlement noise)" : "n/a" },
     timeframes: ctx.mtf,
+    cross: ctx.cross,
     gap: { pts: gapPts, filled: cal?.today.gapFilled ?? null, fillLevel: cal?.today.gapFillLevel ?? null, nullFillProb },
     calendar: cal ? { dayName: cal.dayName, timeBucket: cal.timeBucket, isMonthlyOpex: cal.isMonthlyOpex, isEarlyClose: cal.isEarlyClose, priorDayRet: cal.prior?.ret ?? null, priorCloseLocation: cal.prior?.closeLocation ?? null, weekToDatePct: cal.weekToDatePct, priorWeekRet: cal.priorWeek?.ret ?? null, coverageDays: cal.coverageDays } : null,
     whenToSell,

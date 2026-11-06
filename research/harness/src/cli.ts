@@ -9,7 +9,10 @@
 import { readdirSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadCboeDay } from "./load-cboe.ts";
-import { runReplay, performance as perf, frameAt, buildContext, fmtEt, etToMs, sessionClock, intrinsic, DEFAULT_COSTS, resalePnl, settlementPnl, type StoredSnapshot, type ChainSnapshot, type ReplayTrade } from "@predictit/engine";
+import { runReplay, performance as perf, frameAt, buildContext, fmtEt, etToMs, sessionClock, intrinsic, resalePnl, settlementPnl, type StoredSnapshot, type ChainSnapshot, type ReplayTrade } from "@predictit/engine";
+
+// cost model aligned with the deployed defaults (Schwab $0.65 + SPX pass-through ≈ $0.70 per contract per side)
+const DEFAULT_COSTS = { commissionPerContract: 0.65, feesPerContract: 0.7 };
 
 function arg(name: string, def?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);

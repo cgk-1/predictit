@@ -10,6 +10,7 @@ import { gexRegimeLabel } from "../gex/gex";
 import type { SessionClock } from "../time/session";
 import type { TickFeatures } from "../features/tick";
 import type { MtfSummary } from "../features/mtf";
+import type { CrossFeatures } from "../features/cross";
 
 export type TrendLabel = "trend-up" | "trend-down" | "range" | "unknown";
 export type StructureLabel = "breakout-up" | "breakout-down" | "failed-breakout-up" | "failed-breakout-down" | "inside-range" | "unknown";
@@ -36,22 +37,24 @@ export interface RegimeAssessment {
 
 export interface RegimeInputs {
   clock: SessionClock;
-  spxBars: BarFeatures | null;
-  spyBars: BarFeatures | null;
-  spxChain: ChainFeatures | null;
+  bars: BarFeatures | null;
+  companionBars: BarFeatures | null;
+  companionName: string;
+  chain: ChainFeatures | null;
   gex: GexSummary | null;
   events: ScheduledEvent[];
-  staleness: { spxMs: number | null; chainMs: number | null; barsMs: number | null };
+  staleness: { quoteMs: number | null; chainMs: number | null; barsMs: number | null };
   mode: "LIVE" | "DELAYED" | "REPLAY" | "NONE";
   tick?: TickFeatures;
   mtf?: MtfSummary | null;
+  cross?: CrossFeatures;
 }
 
 export function assessRegime(i: RegimeInputs): RegimeAssessment {
   const ev: string[] = [];
   const notes: DataQualityNote[] = [];
   const asOf = i.clock.now;
-  const b = i.spxBars;
+  const b = i.bars;
   // trend vs range: efficiency ratio + 60m return
   let trend: TrendLabel = "unknown";
   if (b && b.er60 !== null && b.ret60 !== null) {
@@ -88,20 +91,24 @@ export function assessRegime(i: RegimeInputs): RegimeAssessment {
     volatility = b.compression15 <= 0.55 ? "compression" : b.compression15 >= 1.6 ? "expansion" : "normal";
     ev.push(`Last 15m range is ${b.compression15.toFixed(2)}× the session's median 15m range → ${volatility}.`);
   }
-  const rvOverIv = b?.rv30 && i.spxChain?.front?.atmIv ? b.rv30 / i.spxChain.front.atmIv : null;
-  if (rvOverIv !== null) ev.push(`30m realized vol ${(b!.rv30! * 100).toFixed(1)}% vs 0DTE ATM IV ${(i.spxChain!.front!.atmIv! * 100).toFixed(1)}% (ratio ${rvOverIv.toFixed(2)}).`);
+  const rvOverIv = b?.rv30 && i.chain?.front?.atmIv ? b.rv30 / i.chain.front.atmIv : null;
+  if (rvOverIv !== null) ev.push(`30m realized vol ${(b!.rv30! * 100).toFixed(1)}% vs 0DTE ATM IV ${(i.chain!.front!.atmIv! * 100).toFixed(1)}% (ratio ${rvOverIv.toFixed(2)}).`);
   // liquidity from front-expiry ATM spread
   let liquidity: LiquidityLabel = "unknown";
-  const lq = i.spxChain?.liquidity;
+  const lq = i.chain?.liquidity;
   if (lq && lq.atmSpreadPct !== null) {
     liquidity = lq.atmSpreadPct <= 0.02 ? "good" : lq.atmSpreadPct <= 0.06 ? "fair" : "poor";
     ev.push(`ATM spread ${(lq.atmSpreadPct * 100).toFixed(1)}% of mid (${lq.atmSpread?.toFixed(2)}), sizes ${lq.atmBidSize}×${lq.atmAskSize} → liquidity ${liquidity}.`);
   }
   // participation: NYSE TICK when live; otherwise unknown (SPY agreement is only a sanity check)
   let participation: RegimeAssessment["participation"] = "unknown";
-  if (i.spyBars && i.spyBars.vwap !== null && i.spxBars?.ret15 !== null && i.spyBars.ret15 !== null && i.spxBars) {
-    const agree = Math.sign(i.spyBars.ret15) === Math.sign(i.spxBars.ret15 ?? 0);
-    ev.push(`SPY 15m return ${(i.spyBars.ret15 * 100).toFixed(2)}% ${agree ? "confirms" : "diverges from"} SPX.`);
+  if (i.companionBars && i.companionBars.ret15 !== null && b?.ret15 !== null && b) {
+    const agree = Math.sign(i.companionBars.ret15) === Math.sign(b.ret15 ?? 0);
+    ev.push(`${i.companionName} 15m return ${(i.companionBars.ret15 * 100).toFixed(2)}% ${agree ? "agrees in sign" : "diverges in sign"} (sign only; no level arithmetic across instruments).`);
+  }
+  if (i.cross && i.cross.label !== "n/a") {
+    ev.push(i.cross.text);
+    if (participation === "unknown") participation = i.cross.label === "broad-confirm" ? "broad" : i.cross.label === "divergent" ? "divergent" : "narrow";
   }
   const tk = i.tick;
   if (tk && tk.label !== "n/a") {
@@ -139,11 +146,11 @@ export function assessRegime(i: RegimeInputs): RegimeAssessment {
     dataConfidence = "medium";
     notes.push({ level: "warn", message: "Operating on DELAYED data (15 min). Levels and quotes are stale by construction; do not execute on them." });
   }
-  if (stale(i.staleness.spxMs, 20_000) || stale(i.staleness.chainMs, 90_000)) {
+  if (stale(i.staleness.quoteMs, 20_000) || stale(i.staleness.chainMs, 90_000)) {
     dataConfidence = dataConfidence === "high" ? "medium" : "low";
-    notes.push({ level: "warn", message: `Stale inputs: SPX ${fmtMs(i.staleness.spxMs)}, chain ${fmtMs(i.staleness.chainMs)}.` });
+    notes.push({ level: "warn", message: `Stale inputs: quote ${fmtMs(i.staleness.quoteMs)}, chain ${fmtMs(i.staleness.chainMs)}.` });
   }
-  if (stale(i.staleness.spxMs, 120_000) || stale(i.staleness.chainMs, 600_000)) {
+  if (stale(i.staleness.quoteMs, 120_000) || stale(i.staleness.chainMs, 600_000)) {
     dataConfidence = "low";
     notes.push({ level: "block", message: "Inputs are too stale to support a new entry." });
   }

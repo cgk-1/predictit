@@ -34,14 +34,16 @@ export interface IndicatorVote {
 }
 
 export interface EnsembleWeights {
-  /** indicator id → current weight */
+  /** indicator id → current weight for the primary (15-minute) horizon; used by the live lean */
   w: Record<string, number>;
+  /** per-horizon weight vectors ("15m", "60m"); `w` mirrors the 15m vector */
+  wByHorizon?: Record<string, Record<string, number>>;
   /** indicator id → the prior the weight was learned relative to (for reconciliation when priors change) */
   priors?: Record<string, number>;
   /** per-indicator prospective stats */
   stats: Record<string, { n: number; hits: number; brier: number }>;
-  /** ensemble-level stats per horizon (n counts non-neutral, non-flat predictions; abstain = neutral lean) */
-  ensemble: Record<string, { n: number; hits: number; brier: number; flat: number; abstain: number }>;
+  /** ensemble-level stats per horizon (n counts non-neutral, non-flat predictions; abstain = neutral lean; ups = up outcomes among all non-flat) */
+  ensemble: Record<string, { n: number; hits: number; brier: number; flat: number; abstain: number; ups?: number }>;
   updatedAt: number;
   version: number;
 }
@@ -60,10 +62,14 @@ export interface EnsembleConfig {
   burnIn: number;
 }
 
-// η≈0.04 follows the Hedge rate √(ln n / T) for n≈25 experts and T≈2000 decisions; clamps and the slow pull toward
-// the prior play the role of fixed-share forgetting; a 300-decision burn-in keeps the live lean at prior weights
-// until there is something to learn from (docs/research/ensemble_and_seasonality.md §7).
-export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = { eta: 0.04, minMult: 0.25, maxMult: 3, decay: 0.998, flatThreshold: 0.0002, horizonsMin: [15, 60], minScoredForProbability: 300, burnIn: 300 };
+// Update: multiplicative weights on the Brier loss of each indicator's own pseudo-probability p_i = 0.5 + 0.5·v_i
+// (a proper score: an indicator is rewarded for calibrated magnitude, not for sign alone). η≈0.04 follows the Hedge
+// rate √(ln n / T); clamps and a slow pull toward the prior act as fixed-share forgetting. Predictions are made on a
+// 5-minute grid per instrument, so the 600-decision burn-in corresponds to roughly four sessions, not two hours.
+export const DEFAULT_ENSEMBLE_CONFIG: EnsembleConfig = { eta: 0.04, minMult: 0.25, maxMult: 3, decay: 0.998, flatThreshold: 0.0002, horizonsMin: [15, 60], minScoredForProbability: 600, burnIn: 600 };
+
+/** Caps on the total weight a family may carry (many momentum indicators are functions of the same recent return). */
+export const FAMILY_WEIGHT_CAP: Record<IndicatorFamily, number> = { momentum: 2.0, "mean-reversion": 1.2, structure: 1.5, positioning: 1.5, "cross-market": 1.5, calendar: 0.6, flow: 0.8 };
 
 export const INDICATORS: IndicatorSpec[] = [
   { id: "mom5", label: "5-min momentum", family: "momentum", hypothesis: "Very short-term continuation.", evidence: "C", priorWeight: 0.6 },
@@ -77,12 +83,16 @@ export const INDICATORS: IndicatorSpec[] = [
   { id: "priorClose", label: "Above/below prior close", family: "structure", hypothesis: "Holding above the prior close is constructive.", evidence: "C", priorWeight: 0.6 },
   { id: "gapFill", label: "Unfilled gap pull", family: "mean-reversion", hypothesis: "Unfilled gaps attract price back to the prior close.", evidence: "C", priorWeight: 0.6 },
   { id: "expansion", label: "Expansion direction", family: "momentum", hypothesis: "Range expansion continues in its direction.", evidence: "C", priorWeight: 0.6 },
-  { id: "gammaMom", label: "Gamma-conditioned momentum", family: "positioning", hypothesis: "Negative dealer gamma → momentum; positive → reversion (Baltussen et al.).", evidence: "B", priorWeight: 1.2 },
+  { id: "gammaMom", label: "Gamma-conditioned momentum", family: "positioning", hypothesis: "Negative dealer gamma → intraday momentum (Baltussen et al.); positive gamma → no predictability (vote 0).", evidence: "B", priorWeight: 1.2 },
   { id: "flipSide", label: "Side of zero-gamma", family: "positioning", hypothesis: "Below the flip is unstable/weak; above is supported.", evidence: "C", priorWeight: 0.6 },
   { id: "walls", label: "Call/put wall proximity", family: "positioning", hypothesis: "Walls act as resistance/support.", evidence: "C", priorWeight: 0.7 },
   { id: "pcVol", label: "0DTE put/call volume (contrarian)", family: "flow", hypothesis: "Heavy put volume is a contrarian positive.", evidence: "C", priorWeight: 0.4 },
   { id: "optVolTilt", label: "Recent call vs put volume tilt", family: "flow", hypothesis: "Call-heavy recent minutes lean up.", evidence: "C", priorWeight: 0.4 },
-  { id: "spyConfirm", label: "SPY confirmation", family: "cross-market", hypothesis: "SPY agreeing with SPX strengthens the move.", evidence: "C", priorWeight: 0.8 },
+  { id: "spyConfirm", label: "Companion index sign agreement", family: "cross-market", hypothesis: "The other index agreeing in sign strengthens the move (sign only; no level arithmetic).", evidence: "C", priorWeight: 0.8 },
+  { id: "crossAgree", label: "Cross-index agreement (NDX/RUT/DJI/QQQ/IWM/RSP)", family: "cross-market", hypothesis: "Broad agreement across indices marks a market-wide move that continues.", evidence: "C", priorWeight: 0.8 },
+  { id: "breadthRs", label: "Equal-weight vs cap-weight (RSP/SPY)", family: "cross-market", hypothesis: "Equal-weight leading = broad participation; cap-weight leading = narrow.", evidence: "C", priorWeight: 0.6 },
+  { id: "smallCap", label: "Small-cap relative strength (IWM)", family: "cross-market", hypothesis: "Small caps outperforming confirms risk appetite.", evidence: "C", priorWeight: 0.4 },
+  { id: "vixChange", label: "VIX 15-min change (inverse)", family: "cross-market", hypothesis: "Falling VIX supports upside; rising VIX pressures.", evidence: "C", priorWeight: 0.6 },
   { id: "tf5", label: "5-min trend (EMA 9/21)", family: "momentum", hypothesis: "5-minute EMA alignment continues over the next 15–30 minutes.", evidence: "C", priorWeight: 0.7 },
   { id: "tf10", label: "10-min trend (EMA 9/21)", family: "momentum", hypothesis: "10-minute EMA alignment continues.", evidence: "C", priorWeight: 0.8 },
   { id: "tf30", label: "30-min trend (EMA 9/21)", family: "momentum", hypothesis: "30-minute EMA alignment sets the session bias.", evidence: "C", priorWeight: 1.0 },
@@ -106,7 +116,20 @@ export function initialWeights(now: number): EnsembleWeights {
     w[i.id] = i.priorWeight;
     priors[i.id] = i.priorWeight;
   }
-  return { w, priors, stats: {}, ensemble: {}, updatedAt: now, version: 1 };
+  return { w, wByHorizon: { "15m": { ...w }, "60m": { ...w } }, priors, stats: {}, ensemble: {}, updatedAt: now, version: 1 };
+}
+
+/** Scale a weight vector so no family exceeds its cap (transparent redundancy control). */
+export function applyFamilyCaps(w: Record<string, number>, available: Set<string>): Record<string, number> {
+  const out = { ...w };
+  const byFam: Record<string, number> = {};
+  for (const i of INDICATORS) if (available.has(i.id)) byFam[i.family] = (byFam[i.family] ?? 0) + (w[i.id] ?? i.priorWeight);
+  for (const i of INDICATORS) {
+    const cap = FAMILY_WEIGHT_CAP[i.family];
+    const tot = byFam[i.family] ?? 0;
+    if (tot > cap && available.has(i.id)) out[i.id] = (w[i.id] ?? i.priorWeight) * (cap / tot);
+  }
+  return out;
 }
 
 /** Rebase stored weights when an indicator's prior changed or a new indicator was added (keeps the learned multiplier). */
@@ -127,15 +150,16 @@ export function reconcileWeights(stored: EnsembleWeights): EnsembleWeights {
     }
     priors[i.id] = i.priorWeight;
   }
-  return { ...stored, w, priors };
+  const wByHorizon = stored.wByHorizon ?? { "15m": { ...w }, "60m": { ...w } };
+  return { ...stored, w, wByHorizon, priors };
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 const scaled = (x: number | null | undefined, unit: number) => (x === null || x === undefined || !Number.isFinite(x) ? null : clamp(Math.tanh(x / unit), -1, 1));
 
 export function indicatorVotes(ctx: EngineContext, cal: CalendarFeatures | null): IndicatorVote[] {
-  const b = ctx.spxBars;
-  const spot = ctx.frame.spx?.last ?? b?.last ?? null;
+  const b = ctx.bars;
+  const spot = ctx.quote?.last ?? b?.last ?? null;
   const atr = b?.atr14 ?? null;
   const unitRet = spot && atr ? (0.5 * atr) / spot : 0.0005; // one "unit" of return ≈ half an ATR
   const v: IndicatorVote[] = [];
@@ -166,7 +190,7 @@ export function indicatorVotes(ctx: EngineContext, cal: CalendarFeatures | null)
   push("expansion", b.compression15 !== null && b.compression15 >= 1.6 ? Math.sign(b.ret15 ?? 0) * 0.7 : 0, b.compression15 !== null ? `15m range ratio ${b.compression15.toFixed(2)}` : "n/a");
   const gm = ctx.regime.gamma;
   const m15 = scaled(b.ret15, 2 * unitRet);
-  push("gammaMom", gm === "unknown" || m15 === null ? null : gm === "negative" ? m15 : gm === "positive" ? -0.5 * m15 : 0, `gamma ${gm}, 15m ${fmtPct(b.ret15)}`);
+  push("gammaMom", gm === "unknown" || m15 === null ? null : gm === "negative" ? m15 : 0, `gamma ${gm}, 15m ${fmtPct(b.ret15)}${gm === "positive" ? " (no predictability under positive gamma)" : ""}`);
   const flip = ctx.gex?.flip.level ?? null;
   push("flipSide", flip ? (spot > flip ? 0.3 : -0.3) : null, flip ? `spot ${spot > flip ? "above" : "below"} flip ${flip.toFixed(0)}` : "no flip estimate");
   const cw = ctx.gex?.walls.callWall ?? null;
@@ -181,16 +205,22 @@ export function indicatorVotes(ctx: EngineContext, cal: CalendarFeatures | null)
     wallText = `near put wall ${pw}`;
   } else if (!cw && !pw) wallVote = null;
   push("walls", wallVote, wallText);
-  const pcv = ctx.spxChain?.pcVolume0dte ?? null;
+  const pcv = ctx.chain?.pcVolume0dte ?? null;
   push("pcVol", pcv !== null ? clamp((pcv - 1) * 0.8, -0.6, 0.6) : null, pcv !== null ? `0DTE P/C volume ${pcv.toFixed(2)}` : "n/a");
-  const sess = ctx.frame.spxBars ? ctx.frame.spxBars.bars.filter((x) => x.t + 60_000 <= ctx.asOf && x.callsVol !== undefined).slice(-15) : [];
+  const sess = ctx.rawBars.filter((x) => x.t + 60_000 <= ctx.asOf && x.callsVol !== undefined).slice(-15);
   if (sess.length >= 10) {
     const c = sess.reduce((a, x) => a + (x.callsVol ?? 0), 0);
     const p = sess.reduce((a, x) => a + (x.putsVol ?? 0), 0);
     push("optVolTilt", c + p > 0 ? clamp(((c - p) / (c + p)) * 3, -0.6, 0.6) : 0, `last 15m calls ${c} / puts ${p}`);
   } else push("optVolTilt", null, "no per-minute options volume");
-  const s = ctx.spyBars;
-  push("spyConfirm", s && s.ret15 !== null && b.ret15 !== null ? (Math.sign(s.ret15) === Math.sign(b.ret15) ? scaled(b.ret15, 2 * unitRet) : 0) : null, s ? `SPY 15m ${fmtPct(s.ret15 ?? null)}` : "no SPY");
+  const s = ctx.companion.bars;
+  push("spyConfirm", s && s.ret15 !== null && b.ret15 !== null ? (Math.sign(s.ret15) === Math.sign(b.ret15) ? scaled(b.ret15, 2 * unitRet) : 0) : null, s ? `${ctx.companion.instrument} 15m ${fmtPct(s.ret15 ?? null)} (sign only)` : `no ${ctx.companion.instrument}`);
+  // cross-market indices
+  const cx = ctx.cross;
+  push("crossAgree", cx.agreement15 === null ? null : (cx.agreement15 - 0.5) * 2 * Math.sign(cx.primaryRet15 ?? 0), cx.agreement15 === null ? "indices unavailable" : `${Math.round(cx.agreement15 * 100)}% of indices agree over 15m`);
+  push("breadthRs", cx.breadthRs15 === null ? null : clamp(cx.breadthRs15 / 0.002, -1, 1) * Math.sign(cx.primaryRet15 ?? 0), cx.breadthRs15 === null ? "RSP/SPY unavailable" : `equal-weight vs cap-weight 15m ${(cx.breadthRs15 * 100).toFixed(2)}%`);
+  push("smallCap", cx.smallCapRs15 === null ? null : clamp(cx.smallCapRs15 / 0.003, -1, 1), cx.smallCapRs15 === null ? "IWM unavailable" : `IWM rel. 15m ${(cx.smallCapRs15 * 100).toFixed(2)}%`);
+  push("vixChange", cx.vix?.change15 === null || cx.vix?.change15 === undefined ? null : clamp(-cx.vix.change15 / 0.8, -1, 1), cx.vix?.change15 === null || cx.vix?.change15 === undefined ? "VIX unavailable" : `VIX 15m change ${cx.vix.change15 >= 0 ? "+" : ""}${cx.vix.change15.toFixed(2)}`);
   // multi-timeframe
   const mtf = ctx.mtf;
   const tfVote = (tf: 5 | 10 | 30) => {
@@ -274,6 +304,9 @@ export function computeLean(ctx: EngineContext, cal: CalendarFeatures | null, we
   const votes = indicatorVotes(ctx, cal);
   const scoredTotal = Object.values(weights.ensemble).reduce((a, e) => a + e.n, 0);
   const useLearned = scoredTotal >= cfg.burnIn;
+  const available = new Set(votes.filter((v) => v.vote !== null).map((v) => v.id));
+  const base = useLearned ? weights.wByHorizon?.["15m"] ?? weights.w : Object.fromEntries(INDICATORS.map((i) => [i.id, i.priorWeight]));
+  const capped = applyFamilyCaps(base, available);
   let num = 0;
   let den = 0;
   let avail = 0;
@@ -281,7 +314,7 @@ export function computeLean(ctx: EngineContext, cal: CalendarFeatures | null, we
   const rows: LeanResult["votes"] = [];
   for (const vt of votes) {
     const spec = INDICATORS.find((i) => i.id === vt.id)!;
-    const w = useLearned ? (weights.w[vt.id] ?? spec.priorWeight) : spec.priorWeight;
+    const w = capped[vt.id] ?? spec.priorWeight;
     const contribution = vt.vote === null ? 0 : w * vt.vote;
     if (vt.vote !== null) {
       avail++;
@@ -317,6 +350,8 @@ export function computeLean(ctx: EngineContext, cal: CalendarFeatures | null, we
 
 export interface PendingPrediction {
   id: string;
+  /** instrument the prediction is about (its own price path scores it) */
+  instrument?: "SPX" | "SPY";
   at: number;
   horizonMin: number;
   dueAt: number;
@@ -333,10 +368,10 @@ export interface ScoredPrediction extends PendingPrediction {
   hit: boolean | null;
 }
 
-export function makePredictions(lean: LeanResult, spot: number, cfg: EnsembleConfig = DEFAULT_ENSEMBLE_CONFIG): PendingPrediction[] {
+export function makePredictions(lean: LeanResult, spot: number, cfg: EnsembleConfig = DEFAULT_ENSEMBLE_CONFIG, instrument: "SPX" | "SPY" = "SPX"): PendingPrediction[] {
   const votes: Record<string, number> = {};
   for (const r of lean.votes) if (r.vote !== null && r.vote !== 0) votes[r.id] = r.vote;
-  return cfg.horizonsMin.map((h) => ({ id: `${lean.asOf}:${h}`, at: lean.asOf, horizonMin: h, dueAt: lean.asOf + h * 60_000, spotAt: spot, score: lean.score, votes }));
+  return cfg.horizonsMin.map((h) => ({ id: `${instrument}:${lean.asOf}:${h}`, instrument, at: lean.asOf, horizonMin: h, dueAt: lean.asOf + h * 60_000, spotAt: spot, score: lean.score, votes }));
 }
 
 function priceAtOrAfter(path: PricePoint[], t: number, toleranceMs: number): number | null {
@@ -346,7 +381,8 @@ function priceAtOrAfter(path: PricePoint[], t: number, toleranceMs: number): num
 
 /** Score due predictions against the price path and update weights (bounded). Pure: returns new objects. */
 export function scorePredictions(pending: PendingPrediction[], path: PricePoint[], now: number, weights: EnsembleWeights, cfg: EnsembleConfig = DEFAULT_ENSEMBLE_CONFIG): { weights: EnsembleWeights; scored: ScoredPrediction[]; pending: PendingPrediction[] } {
-  const w: Record<string, number> = { ...weights.w };
+  const wBy: Record<string, Record<string, number>> = {};
+  for (const h of cfg.horizonsMin) wBy[`${h}m`] = { ...(weights.wByHorizon?.[`${h}m`] ?? weights.w) };
   const stats = { ...weights.stats };
   const ens = { ...weights.ensemble };
   const scored: ScoredPrediction[] = [];
@@ -365,7 +401,8 @@ export function scorePredictions(pending: PendingPrediction[], path: PricePoint[
     const outcome: ScoredPrediction["outcome"] = Math.abs(ret) < cfg.flatThreshold ? "flat" : ret > 0 ? "up" : "down";
     const y = outcome === "up" ? 1 : outcome === "down" ? -1 : 0;
     const key = `${p.horizonMin}m`;
-    const e = ens[key] ?? { n: 0, hits: 0, brier: 0, flat: 0, abstain: 0 };
+    const w = (wBy[key] = wBy[key] ?? { ...weights.w });
+    const e = ens[key] ?? { n: 0, hits: 0, brier: 0, flat: 0, abstain: 0, ups: 0 };
     let hit: boolean | null = null;
     if (y !== 0) {
       const prob = 0.5 + 0.5 * Math.max(-1, Math.min(1, p.score)); // squash to a pseudo-probability for Brier
@@ -376,12 +413,15 @@ export function scorePredictions(pending: PendingPrediction[], path: PricePoint[
         if (hit) e.hits++;
         e.brier += (prob - yb) ** 2;
       } else e.abstain++;
+      e.ups = (e.ups ?? 0) + yb;
       for (const [id, v] of Object.entries(p.votes)) {
         const spec = INDICATORS.find((i) => i.id === id);
         if (!spec) continue;
-        const loss = (1 - v * y) / 2; // 0 = fully right, 1 = fully wrong
+        // proper-score loss: Brier of the indicator's own pseudo-probability vs the outcome; 0.25 = uninformative
+        const pi = 0.5 + 0.5 * v;
+        const loss = (pi - yb) ** 2;
         const cur = w[id] ?? spec.priorWeight;
-        let next = cur * Math.exp(-cfg.eta * (loss - 0.5) * 2);
+        let next = cur * Math.exp(-cfg.eta * (loss - 0.25) * 4);
         next = spec.priorWeight + (next - spec.priorWeight) * cfg.decay;
         w[id] = Math.max(cfg.minMult * spec.priorWeight, Math.min(cfg.maxMult * spec.priorWeight, next));
         const st = stats[id] ?? { n: 0, hits: 0, brier: 0 };
@@ -394,7 +434,7 @@ export function scorePredictions(pending: PendingPrediction[], path: PricePoint[
     ens[key] = e;
     scored.push({ ...p, scoredAt: now, spotThen: px, ret, outcome, hit });
   }
-  return { weights: { w, priors: weights.priors ?? Object.fromEntries(INDICATORS.map((i) => [i.id, i.priorWeight])), stats, ensemble: ens, updatedAt: now, version: weights.version + 1 }, scored, pending: still };
+  return { weights: { w: wBy["15m"] ?? { ...weights.w }, wByHorizon: wBy, priors: weights.priors ?? Object.fromEntries(INDICATORS.map((i) => [i.id, i.priorWeight])), stats, ensemble: ens, updatedAt: now, version: weights.version + 1 }, scored, pending: still };
 }
 
 export function wilson(hits: number, n: number, z = 1.96): { p: number; lo: number; hi: number } {
@@ -407,8 +447,8 @@ export function wilson(hits: number, n: number, z = 1.96): { p: number; lo: numb
 }
 
 export interface LeanStats {
-  horizons: Record<string, { n: number; hitRate: number; ci: [number, number]; brier: number; flat: number; abstain: number; baselineBrier: 0.25 }>;
-  indicators: Array<{ id: string; label: string; weight: number; prior: number; n: number; hitRate: number | null }>;
+  horizons: Record<string, { n: number; hitRate: number; ci: [number, number]; brier: number; flat: number; abstain: number; baselineBrier: 0.25; /** share of up outcomes (climatology) */ upShare: number | null; /** Brier of the constant climatology forecast */ climBrier: number | null; /** Brier skill score vs climatology (>0 = better) */ bss: number | null }>;
+  indicators: Array<{ id: string; label: string; weight: number; weight60: number; prior: number; n: number; hitRate: number | null }>;
   calibratedProbabilityAvailable: boolean;
   note: string;
 }
@@ -418,17 +458,21 @@ export function leanStats(weights: EnsembleWeights, cfg: EnsembleConfig = DEFAUL
   let total = 0;
   for (const [k, e] of Object.entries(weights.ensemble)) {
     const wi = wilson(e.hits, e.n);
-    horizons[k] = { n: e.n, hitRate: wi.p, ci: [wi.lo, wi.hi], brier: e.n ? e.brier / e.n : NaN, flat: e.flat, abstain: e.abstain ?? 0, baselineBrier: 0.25 };
+    const nonFlat = e.n + (e.abstain ?? 0);
+    const upShare = nonFlat ? (e.ups ?? 0) / nonFlat : null;
+    const climBrier = upShare !== null ? upShare * (1 - upShare) : null;
+    const brier = e.n ? e.brier / e.n : NaN;
+    horizons[k] = { n: e.n, hitRate: wi.p, ci: [wi.lo, wi.hi], brier, flat: e.flat, abstain: e.abstain ?? 0, baselineBrier: 0.25, upShare, climBrier, bss: climBrier && e.n ? 1 - brier / climBrier : null };
     total += e.n;
   }
   const indicators = INDICATORS.map((i) => {
     const st = weights.stats[i.id];
-    return { id: i.id, label: i.label, weight: weights.w[i.id] ?? i.priorWeight, prior: i.priorWeight, n: st?.n ?? 0, hitRate: st && st.n ? st.hits / st.n : null };
+    return { id: i.id, label: i.label, weight: weights.w[i.id] ?? i.priorWeight, weight60: weights.wByHorizon?.["60m"]?.[i.id] ?? i.priorWeight, prior: i.priorWeight, n: st?.n ?? 0, hitRate: st && st.n ? st.hits / st.n : null };
   });
   const ok = total >= cfg.minScoredForProbability;
   const note = ok
-    ? "Hit rates are prospective (paper), not out-of-sample validated strategies. 95% Wilson half-widths: ±9.6 pp at n=100, ±5.6 pp at n=300, ±3.1 pp at n=1000."
-    : `Calibrated probabilities withheld until ≥${cfg.minScoredForProbability} scored predictions (currently ${total}); learned weights apply after a ${cfg.burnIn}-decision burn-in. Detecting a 55% hit rate vs 50% with 80% power needs ≈616 decisions.`;
+    ? "Prospective (paper) scores on a 5-minute decision grid; compare the Brier skill score against climatology, not the hit rate alone. 95% Wilson half-widths: ±9.6 pp at n=100, ±5.6 pp at n=300, ±3.1 pp at n=1000; overlapping horizons inflate apparent n."
+    : `Calibrated probabilities withheld until ≥${cfg.minScoredForProbability} scored grid decisions (currently ${total}, ≈${(cfg.minScoredForProbability / 156).toFixed(0)} sessions per instrument); learned weights apply after a ${cfg.burnIn}-decision burn-in. Detecting a 55% hit rate vs 50% with 80% power needs ≈616 independent decisions.`;
   return { horizons, indicators, calibratedProbabilityAvailable: ok, note };
 }
 

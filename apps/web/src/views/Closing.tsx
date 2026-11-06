@@ -1,6 +1,6 @@
 import { CLOSING_METHOD_NOTES, subWindowFor, type ClosingSubWindow } from "@predictit/engine";
 import { api } from "../api/client";
-import { useServer, useServerNow } from "../api/context";
+import { useInstrument, useServer, useServerNow } from "../api/context";
 import { ModeBadge, stateClass, ValidationChip } from "../components/Badges";
 import { LearningBox } from "../components/Grades";
 import { Notes } from "../components/Notes";
@@ -20,6 +20,8 @@ const WINDOWS: Array<{ id: ClosingSubWindow; label: string }> = [
 ];
 
 export function ClosingView() {
+  const [inst] = useInstrument();
+  if (inst === "SPY") return <p className="empty">The closing-window module is SPX-only (SPXW PM cash settlement at 16:00). SPY options trade to 16:15 and settle physically; switch the toggle to SPX for this view.</p>;
   const { state: s } = useServer();
   const now = useServerNow();
   const grades = useFetch((sig) => api.grades(sig), "grades", 60_000);

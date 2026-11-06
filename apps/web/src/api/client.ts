@@ -4,8 +4,9 @@
  * network failures become ApiError(0, ...), and a 401 invokes the registered unauthorized handler
  * (the app reloads so the Worker can serve its login shell).
  */
+import type { GexSummary } from "@predictit/engine";
 import type { ChangeEvent, DecisionRecord, PaperPosition } from "@predictit/engine";
-import type { AppSettings, BarsResponse, ChainResponse, DateEntry, GradesResponse, LeanResponse, PerformanceResponse, ReplayResponse, SchwabStatus, ServerState } from "./types";
+import type { AppSettings, BarsResponse, ChainResponse, DateEntry, GradesResponse, LeanResponse, PerformanceResponse, ReplayResponse, SchwabStatus, ServerState, AlertsStatus } from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -87,7 +88,7 @@ export const api = {
   decisions: (date: string, signal?: AbortSignal) => apiFetch<DecisionRecord[]>(`/api/decisions${q({ date })}`, { signal }),
   changes: (date: string, signal?: AbortSignal) => apiFetch<ChangeEvent[]>(`/api/changes${q({ date })}`, { signal }),
   dates: (signal?: AbortSignal) => apiFetch<DateEntry[]>("/api/dates", { signal }),
-  replay: (date: string, at: number, signal?: AbortSignal) => apiFetch<ReplayResponse>(`/api/replay${q({ date, at })}`, { signal }),
+  replay: (date: string, at: number, signal?: AbortSignal, instrument: "SPX" | "SPY" = "SPX") => apiFetch<ReplayResponse>(`/api/replay${q({ date, at, instrument })}`, { signal }),
   performance: (signal?: AbortSignal) => apiFetch<PerformanceResponse>("/api/performance", { signal }),
   positions: (date?: string, signal?: AbortSignal) => apiFetch<PaperPosition[]>(`/api/positions${q({ date })}`, { signal }),
   openPosition: (input: OpenPositionInput) => apiFetch<PaperPosition>("/api/positions", { json: input }),
@@ -95,7 +96,11 @@ export const api = {
   getSettings: (signal?: AbortSignal) => apiFetch<AppSettings>("/api/settings", { signal }),
   putSettings: (patch: SettingsPatch) => apiFetch<AppSettings>("/api/settings", { method: "PUT", json: patch }),
   lean: (signal?: AbortSignal) => apiFetch<LeanResponse>("/api/lean", { signal }),
+  gex: (instrument: "SPX" | "SPY", signal?: AbortSignal) => apiFetch<GexSummary | null>(`/api/gex${q({ instrument })}`, { signal }),
   grades: (signal?: AbortSignal) => apiFetch<GradesResponse>("/api/grades", { signal }),
+  alertsStatus: (signal?: AbortSignal) => apiFetch<AlertsStatus>("/api/alerts/status", { signal }),
+  /** write-only; an empty URL clears the webhook */
+  setDiscordWebhook: (url: string) => apiFetch<AlertsStatus>("/api/alerts/discord", { json: { url } }),
   schwabStatus: () => apiFetch<SchwabStatus>("/api/schwab/status"),
   schwabCredentials: (clientId: string, clientSecret: string) => apiFetch<SchwabStatus>("/api/schwab/credentials", { json: { clientId, clientSecret } }),
   schwabAuthUrl: () => apiFetch<{ url: string; redirectUri: string }>("/api/schwab/auth-url"),

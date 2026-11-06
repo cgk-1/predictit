@@ -109,7 +109,7 @@ async function handleApi(req: Request, env: Env, url: URL, sub: string): Promise
       const date = q.get("date");
       const at = Number(q.get("at"));
       if (!date || !Number.isFinite(at)) return json({ error: "date and at required" }, { status: 400 });
-      return json(await m.replayAt(date, at));
+      return json(await m.replayAt(date, at, q.get("instrument") === "SPY" ? "SPY" : "SPX"));
     }
     if (p === "/performance") return json(await m.performance());
     if (p === "/positions" && req.method === "GET") return json(await m.allPositions(q.get("date") ?? undefined));
@@ -125,7 +125,13 @@ async function handleApi(req: Request, env: Env, url: URL, sub: string): Promise
     if (p === "/settings" && req.method === "GET") return json(await m.getSettings());
     if (p === "/settings" && req.method === "PUT") return json(await m.putSettings((await req.json()) as any));
     if (p === "/lean") return json(await m.lean());
+    if (p === "/gex") return json(await m.gexDetail(q.get("instrument") === "SPY" ? "SPY" : "SPX"));
     if (p === "/grades") return json(await m.grades());
+    if (p === "/alerts/status") return json(await m.alertsStatus());
+    if (p === "/alerts/discord" && req.method === "POST") {
+      const body = (await req.json()) as { url?: string };
+      return json(await m.setDiscordWebhook(String(body.url ?? "")));
+    }
     if (p === "/schwab/status") return json(await m.schwabStatus());
     if (p === "/schwab/credentials" && req.method === "POST") {
       const body = (await req.json()) as { clientId: string; clientSecret: string };

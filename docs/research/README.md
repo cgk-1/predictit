@@ -9,5 +9,6 @@
 | `gex_and_literature.md` | GEX methodology and criticisms, dealer positioning inference, 0DTE / pinning / intraday-momentum literature, public repos, testable hypotheses |
 | `brokers_and_auction.md` | Broker rules for expiring options, fees, NYSE/Nasdaq/Arca closing auctions, S&P close computation |
 | `ensemble_and_seasonality.md` | Calendar/seasonality effects (pre-FOMC drift and its decay, overnight vs intraday, intraday momentum, turn-of-month, day-of-week), S/R evidence (Osler), gap-fill null, online indicator weighting (Hedge/MWU, forgetting, calibration, sample sizes, multiple testing), expected move, exit timing, repos |
+| `comparable_tools.md` | Survey of comparable tools (SpotGamma, MenthorQ, Unusual Whales, GEXBot, vol.land, open-source GEX/0DTE repos, research sites): what they show, data sources, pricing, what is worth adopting here and what is not |
 
 Each memo tags claims as verified / secondary / unverified and lists what could not be checked.

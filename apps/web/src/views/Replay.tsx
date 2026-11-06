@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { etToMs, fmtGexUsd, type DecisionRecord } from "@predictit/engine";
 import { api } from "../api/client";
 import type { ReplayResponse } from "../api/types";
-import { useServer, useServerNow } from "../api/context";
+import { useInstrument, useServer, useServerNow } from "../api/context";
 import { ChangesFeed } from "../components/ChangesFeed";
 import { DecisionCard } from "../components/DecisionCard";
 import { StateBadge } from "../components/Badges";
@@ -17,6 +17,7 @@ import { clamp, fmtContract, fmtPts, fmtTime } from "../lib/format";
 const SESSION_MIN = 405; // 09:30 → 16:15
 
 export function ReplayView() {
+  const [inst] = useInstrument();
   const dates = useFetch((sig) => api.dates(sig), "dates");
   const [date, setDate] = useState<string>("");
   const open = useMemo(() => (date ? etToMs(date, 9, 30) : 0), [date]);
@@ -49,7 +50,7 @@ export function ReplayView() {
     const t = setTimeout(async () => {
       setBusy(true);
       try {
-        const r = await api.replay(date, at, ac.signal);
+        const r = await api.replay(date, at, ac.signal, inst);
         if (reqRef.current !== id) return;
         setResult(r);
         setError(null);

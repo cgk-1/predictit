@@ -31,7 +31,30 @@ import type {
   DecisionGrade,
   GradeSummary,
   ClosingGrade,
+  MtfSummary,
+  CrossFeatures,
 } from "@predictit/engine";
+
+export type Instrument = "SPX" | "SPY";
+
+/** Per-instrument evaluation (native analysis of that instrument's own quote, bars, chain and levels). */
+export interface InstrumentState {
+  instrument: Instrument;
+  mode: "LIVE" | "DELAYED" | "REPLAY" | "NONE";
+  quote: IndexQuote | null;
+  decision: DecisionRecord | null;
+  decisionAgeMs: number | null;
+  regime: RegimeAssessment | null;
+  levels: KeyLevel[];
+  bars: BarFeatures | null;
+  chainFeatures: ChainFeatures | null;
+  gex: GexSummary | null;
+  closing: ClosingAssessment | null;
+  mtf: MtfSummary | null;
+  cross: CrossFeatures | null;
+  notes: DataQualityNote[];
+  evaluatedAt: number | null;
+}
 
 export interface ClosingLearnerSummary {
   gradedSessions: number;
@@ -55,6 +78,13 @@ export interface FeedHealth {
   lastError: string | null;
   lastLatencyMs: number | null;
   consecutiveErrors: number;
+}
+
+export interface AlertsStatus {
+  /** a Discord webhook is stored server-side (the URL itself is never returned) */
+  discord: boolean;
+  lastSentAt: number | null;
+  lastError: string | null;
 }
 
 export interface SchwabStatus {
@@ -93,6 +123,10 @@ export interface ServerState {
   tickFeatures: TickFeatures;
   /** summary of continuous self-grading of past recommendations */
   grades: GradeSummary;
+  /** other indices (NDX, RUT, DJI, QQQ, IWM, RSP, VIX): last and 15-minute return */
+  indices: Record<string, { last: number | null; ret15: number | null }>;
+  /** both instruments, analysed natively; top-level fields mirror SPX for compatibility */
+  instruments: { SPX: InstrumentState; SPY: InstrumentState };
   decision: DecisionRecord | null;
   decisionAgeMs: number | null;
   regime: RegimeAssessment | null;

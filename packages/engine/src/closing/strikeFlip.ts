@@ -11,7 +11,7 @@
  */
 import type { ChainSnapshot, DataQualityNote, IndexQuote, OptionQuote, Right } from "../types";
 import { levelInteraction, type LevelInteraction, type PricePoint } from "../features/levels";
-import { normCdf, normPdf } from "../pricing/bs";
+import { normCdf, normPdf, sigmaFromStraddle } from "../pricing/bs";
 import { isPmExpiringToday } from "../contracts/series";
 import { breakevenWithCosts, DEFAULT_COSTS, perSideCost, type CostModel } from "../contracts/payoff";
 import type { SessionClock } from "../time/session";
@@ -38,8 +38,10 @@ export interface ClosingSettings {
   settlementNoisePts: number;
   /** fraction of the recent speed assumed to persist (momentum hypothesis) when computing the drifted fair value */
   driftPersistence: number;
-  /** minimum modelled edge (points) over the ask required to recommend */
+  /** minimum modelled edge (points) over the ask required to recommend (0 = market-consistent; edge is informational) */
   minEdgePts: number;
+  /** a contract is only recommended when its breakeven requires ≤ this many σ of remaining move */
+  maxRequiredSigma: number;
   costs: CostModel;
   /** maximum premium per contract in USD (ask × 100); contracts above it are never recommended */
   maxPremiumUsd: number;
@@ -59,8 +61,9 @@ export const DEFAULT_CLOSING_SETTINGS: ClosingSettings = {
   maxQuoteAgeMs: 5000,
   seasonalityMultiplier: 1.5,
   settlementNoisePts: 1.5,
-  driftPersistence: 0.5,
-  minEdgePts: 0.25,
+  driftPersistence: 0,
+  minEdgePts: 0,
+  maxRequiredSigma: 0.75,
   costs: { commissionPerContract: 0.65, feesPerContract: 0.7 },
   maxPremiumUsd: 200,
 };
@@ -222,16 +225,16 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
       const p = todays.find((o) => o.strike === atm && o.right === "P");
       if (c && p && c.bid > 0 && p.bid > 0) {
         straddleMid = (c.bid + c.ask) / 2 + (p.bid + p.ask) / 2;
-        // ATM straddle ≈ E|S_T − K|; for normal, E|X| = σ√(2/π) → σ = straddle·√(π/2); adjust for the ATM offset
-        const offset = Math.abs(spot - atm);
-        sigmaIvPts = Math.max(0, straddleMid - offset) * Math.sqrt(Math.PI / 2);
+        // σ solved from E|S_T − K| = straddle under a normal terminal distribution (offset-aware; see bs.ts)
+        sigmaIvPts = sigmaFromStraddle(straddleMid, spot - atm);
       }
     }
   }
   const rvPerMin = realizedPtsPerSqrtMin(i.path, asOf, 10);
   const sigmaRvPts = rvPerMin !== null ? rvPerMin * Math.sqrt(Math.max(remainMin, 0.05)) * s.seasonalityMultiplier : null;
-  const sigmaCore = sigmaIvPts !== null && sigmaRvPts !== null ? Math.max(sigmaIvPts, sigmaRvPts) : sigmaIvPts ?? sigmaRvPts ?? (Number.isFinite(spot) ? spot * 0.0007 : 0);
-  const sigmaUsedPts = Math.sqrt(sigmaCore ** 2 + s.settlementNoisePts ** 2);
+  // market-implied σ (from the 0DTE straddle) is primary: it already prices the closing auction. The realized-vol
+  // path (with the seasonality multiplier and an explicit settlement-noise term) is only a fallback.
+  const sigmaUsedPts = sigmaIvPts !== null && sigmaIvPts > 0 ? sigmaIvPts : sigmaRvPts !== null ? Math.sqrt(sigmaRvPts ** 2 + s.settlementNoisePts ** 2) : Number.isFinite(spot) ? spot * 0.0007 : 0;
   const speed3 = speedPtsPerMin(i.path, asOf, 3);
   const driftPts = (speed3 ?? 0) * remainMin * s.driftPersistence;
 
@@ -248,7 +251,7 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
       const accel = speed1 !== null && sp3 !== null ? speed1 - sp3 : null;
       const dist = spot - K;
       const etaSec = sp3 && Math.sign(sp3) === -Math.sign(dist) && sp3 !== 0 ? (Math.abs(dist) / Math.abs(sp3)) * 60 : null;
-      const pAbove = sigmaUsedPts > 0 ? normCdf((spot + driftPts - K) / sigmaUsedPts) : spot > K ? 1 : 0;
+      const pAbove = sigmaUsedPts > 0 ? normCdf((spot - K) / sigmaUsedPts) : spot > K ? 1 : 0;
       const evalQuote = (o: OptionQuote | undefined): QuoteEval | null => {
         if (!o || !(o.ask > 0)) return null;
         const spread = o.ask - o.bid;
@@ -389,10 +392,15 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
       for (const q of qs) {
         if (q.feasibility.hold !== "ok") continue;
         const mode: Cand["mode"] = q.feasibility.resale === "ok" ? "resale" : "hold-to-settlement";
-        if (q.edgeWithDrift >= s.minEdgePts / trust) cands.push({ strike: st, q, mode });
+        // gate: the breakeven must be reachable within maxRequiredSigma of the remaining move; the modelled edge is
+        // informational (market-consistent σ makes it ≈ 0 by construction) unless a positive threshold is configured
+        if (q.requiredMovePts > s.maxRequiredSigma * sigmaUsedPts * trust) continue;
+        if (q.edgeWithDrift < s.minEdgePts / trust) continue;
+        cands.push({ strike: st, q, mode });
       }
     }
-    cands.sort((a, b) => b.q.edgeWithDrift / b.q.ask - a.q.edgeWithDrift / a.q.ask);
+    // rank by model P(ITM) (no drift) then tighter spread
+    cands.sort((a, b) => b.q.pItm - a.q.pItm || a.q.spread - b.q.spread);
     const best = cands[0];
     if (best) {
       const dir = best.q.right === "C" ? "call" : "put";
@@ -413,7 +421,7 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
         rationale: [
           `Pattern: ${best.strike.pattern} at ${K} (${best.strike.interaction.crossings} crossings in 15 min, dwell ${Math.round(best.strike.interaction.dwellMs / 1000)}s).`,
           `Remaining move 1σ ≈ ${sigmaUsedPts.toFixed(1)} pts over ${Math.round(remainSec)}s (straddle ${straddleMid?.toFixed(2) ?? "n/a"}, realized ${sigmaRvPts?.toFixed(1) ?? "n/a"} pts, settlement noise ${s.settlementNoisePts}).`,
-          `Modelled fair value ${best.q.fairNoDrift.toFixed(2)} (no drift) / ${best.q.fairWithDrift.toFixed(2)} (with ${driftPts.toFixed(1)} pt drift) vs ask ${best.q.ask.toFixed(2)} → edge ${best.q.edgeWithDrift.toFixed(2)} pts after costs.`,
+          `Fair value under market-implied σ ${best.q.fairNoDrift.toFixed(2)}${s.driftPersistence > 0 ? ` / ${best.q.fairWithDrift.toFixed(2)} with ${driftPts.toFixed(1)} pt drift (hypothesis)` : ""} vs ask ${best.q.ask.toFixed(2)}; required move ${best.q.requiredMovePts.toFixed(1)} pts = ${(best.q.requiredMovePts / sigmaUsedPts).toFixed(2)}σ.`,
           `Model P(ITM at settlement) ${(best.q.pItm * 100).toFixed(0)}%; breakeven settlement ${best.q.breakevenSettle.toFixed(2)} (needs ${best.q.requiredMovePts.toFixed(1)} pts).`,
           confirmation.text,
         ],
@@ -457,8 +465,9 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
 
 export const CLOSING_METHOD_NOTES = [
   "Strike flip (index crossing a listed strike into settlement) is distinct from the GEX gamma flip (sign change of modelled dealer gamma).",
-  "Remaining-move σ = max(ATM straddle-implied, realized × seasonality) combined with settlement noise; Bachelier (normal) expected intrinsic.",
+  "Remaining-move σ is solved from the 0DTE ATM straddle (offset-aware, normal model); realized vol × seasonality plus settlement noise is only the fallback. Expected intrinsic is Bachelier (normal).",
   "Entry at the ask with an assumed entry delay; resale assumed only when ≥2 minutes remain after entry; final minute always PASS.",
+  "A recommendation requires a directional strike pattern, execution feasibility and a breakeven within 0.75σ of the remaining move; the drift term is off by default (a hypothesis to be validated, not a price).",
   "The last SPX tick is not the settlement value: SPXW PM settlement uses constituent closing-auction prices.",
   "All of the above is a decision aid under explicit hypotheses and is unvalidated until the replay harness reports out-of-sample results.",
 ];

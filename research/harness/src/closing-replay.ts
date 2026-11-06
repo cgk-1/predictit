@@ -19,7 +19,7 @@ for (let t = start; t <= end; t += stepSec * 1000) {
   if (!frame.spx || !frame.spxChain) continue;
   const ctx = buildContext(frame);
   // treat the replayed data as LIVE for the module's feasibility logic (we are studying mechanics, not executing)
-  const a = assessClosingWindow({ clock: ctx.clock, spx: frame.spx, spy: frame.spy ?? null, es: null, path: ctx.spxPath, spyPath: [], esPath: [], chain: frame.spxChain, mode: "LIVE" });
+  const a = assessClosingWindow({ clock: ctx.clock, spx: frame.spx, spy: frame.spy ?? null, es: null, path: ctx.path, spyPath: ctx.companion.path ?? [], esPath: [], chain: frame.spxChain, mode: "LIVE" });
   const r = a.recommendation;
   const row = `${fmtEtTime(t)} ${a.subWindow.padEnd(10)} spot ${a.spot.toFixed(1)} age ${(a.spotAgeMs / 1000).toFixed(0)}s σ ${a.remaining.sigmaUsedPts.toFixed(1)} (iv ${a.remaining.sigmaIvPts?.toFixed(1) ?? "n/a"} rv ${a.remaining.sigmaRvPts?.toFixed(1) ?? "n/a"}) drift ${a.remaining.driftPts.toFixed(1)} → ${r.state}${r.contract ? ` ${r.contract.osi.trim()} ask ${r.contract.ask} edge ${r.contract.edgeWithDrift.toFixed(2)} ${r.mode}` : ""}`;
   const patterns = a.ladder.filter((s) => s.pattern !== "none").map((s) => `${s.strike}:${s.pattern}${s.bias ? "/" + s.bias : ""}`).join(" ");

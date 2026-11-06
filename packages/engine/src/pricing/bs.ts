@@ -116,6 +116,27 @@ export function probItm(right: Right, { S, K, T, sigma, r = 0, q = 0 }: BsInputs
   return right === "C" ? normCdf(d2) : normCdf(-d2);
 }
 
+/**
+ * σ (points) implied by an at-/near-the-money straddle under a normal (Bachelier) terminal distribution centred at
+ * spot: straddle = E|S_T − K| = σ·√(2/π)·exp(−d²/2) + offset·(2Φ(d) − 1), d = offset/σ, offset = spot − K.
+ * Subtracting the offset from the straddle (a common shortcut) underestimates σ badly when spot sits between strikes.
+ */
+export function sigmaFromStraddle(straddle: number, offset: number): number | null {
+  const a = Math.abs(offset);
+  if (!(straddle > 0) || straddle <= a) return null; // no time value beyond the intrinsic
+  const f = (s: number) => s * Math.sqrt(2 / Math.PI) * Math.exp(-(a * a) / (2 * s * s)) + a * (2 * normCdf(a / s) - 1) - straddle;
+  let lo = 1e-6;
+  let hi = Math.max(straddle * 2, a * 4, 1e-3);
+  if (f(hi) < 0) hi = straddle * 10;
+  for (let i = 0; i < 80; i++) {
+    const mid = 0.5 * (lo + hi);
+    if (f(mid) > 0) hi = mid;
+    else lo = mid;
+    if (hi - lo < 1e-7) break;
+  }
+  return 0.5 * (lo + hi);
+}
+
 /** Probability of touching a level before T under driftless lognormal (reflection principle). */
 export function probTouch(S: number, level: number, T: number, sigma: number): number {
   if (T <= 0 || sigma <= 0) return 0;

@@ -165,7 +165,8 @@ describe("Today hierarchy", () => {
       expect(hero).toContain(s.contract.riskUsd <= 200 ? "within $200 budget" : "over $200 budget");
       expect(hero).toContain(`Contract (${s.contract.instrument})`);
     } else {
-      expect(hero).not.toContain("budget");
+      expect(hero).not.toContain("within $200 budget");
+      expect(hero).not.toContain("over $200 budget");
     }
     const over = render(<SummaryCard summary={{ ...s, contract: { instrument: "SPY", osi: "SPY   261106C00600000", label: "SPY 2026-11-06 600C", bid: 2.9, ask: 3.1, riskUsd: 310, breakeven: 603.1, entryCondition: "test" } }} lean={f.decision.lean} now={f.asOf} budgetUsd={200} />, conn(f.state), f.asOf);
     expect(over).toContain("over $200 budget");

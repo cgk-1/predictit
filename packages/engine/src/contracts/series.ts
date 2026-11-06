@@ -80,6 +80,11 @@ export function pmSettlementMs(expiry: string): number {
   return sessionInfo(expiry).closeMs;
 }
 
+/** Last trading instant for SPY options on expiry (16:15 ET; the ETF-option exception). */
+export function spyLastTradeMs(expiry: string): number {
+  return sessionInfo(expiry).spxOptionsCloseMs;
+}
+
 /** Settlement instant for an AM-settled contract (SET is derived from opening prices on expiry). */
 export function amSettlementMs(expiry: string): number {
   return etToMs(expiry, 9, 30);

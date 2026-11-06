@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { DEALER_SIGN_MODELS, fmtGexUsd, type DealerSignModel } from "@predictit/engine";
 import { api } from "../api/client";
-import { useServer, useServerNow } from "../api/context";
+import { useFetch } from "../lib/useFetch";
+import { useInstrument, useServer, useServerNow } from "../api/context";
 import { ModeBadge } from "../components/Badges";
 import { FormStatus, type FormStatusValue } from "../components/Form";
 import { GexChart } from "../components/GexChart";
@@ -17,7 +18,9 @@ export function GammaView() {
   const [pending, setPending] = useState<DealerSignModel | null>(null);
   const [status, setStatus] = useState<FormStatusValue>({ kind: "idle" });
   const configured = s?.settings.engine.gex.dealerSign ?? null;
-  const g = s?.gex ?? null;
+  const [inst] = useInstrument();
+  const detail = useFetch((sig) => api.gex(inst, sig), `gex-${inst}`, 15_000);
+  const g = detail.data ?? s?.gex ?? null;
 
   useEffect(() => {
     if (pending && configured === pending && g?.config.dealerSign === pending) setPending(null);

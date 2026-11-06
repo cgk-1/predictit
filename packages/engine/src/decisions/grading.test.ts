@@ -8,7 +8,7 @@ import type { ChainSnapshot } from "../types";
 
 function rec(asOf: number, state: "CALL SETUP" | "PUT SETUP", inval: number, horizon = 30): DecisionRecord {
   return {
-    id: "d1", version: 1, previousId: null, asOf, expiresAt: asOf + 60000, date: "2026-11-06", phase: "morning", mode: "LIVE", state,
+    id: "d1", instrument: "SPX", version: 1, previousId: null, asOf, expiresAt: asOf + 60000, date: "2026-11-06", phase: "morning", mode: "LIVE", state,
     primary: { id: "x", family: "orb", name: "ORB", direction: state === "CALL SETUP" ? "call" : "put", lifecycle: "triggered", evidence: [], triggerCondition: "", entryZone: null, invalidationLevel: inval, invalidationText: "", targetLevel: null, horizonMinutes: horizon, exitRules: [], preferredExpiry: "0DTE", counterargument: "", dataNotes: [], expiresAt: asOf + 60000, priority: 1, validation: "unvalidated" },
     contracts: [{ instrument: "SPX", withinBudget: true, osi: "SPXW  261106C07400000", root: "SPXW", expiry: "2026-11-06", right: "C", strike: 7400, is0dte: true, bid: 1.8, ask: 2.0, spread: 0.2, spreadPct: 0.1, bidSize: 10, askSize: 10, quoteAgeMs: 0, entry: 2.0, riskUsd: 200, iv: 0.2, delta: 0.4, gamma: 0.01, thetaPerMin: -0.01, breakevenAtExpiry: 7402, atTarget: null, atFlat: { exit: 1.5, ret: -0.25 }, atInvalidation: { exit: 0.5, ret: -0.75 }, rewardRisk: null, breakevenWinRate: null, eligible: true, reasons: [], tradeoff: "" }],
     rankingNotes: [], rankingAssumptions: [], candidates: [], waits: [], passReasons: [], whyWait: [], evidence: [], counterargument: "", regime: {} as any, dataNotes: [], positions: [], closing: null, lean: {} as any, summary: {} as any, inputsDigest: "x",
@@ -26,8 +26,8 @@ describe("decision grading", () => {
     const g = gradeDecision({ record: r, path, chains: [chainWith(2.0, t0), chainWith(3.1, t0 + 29 * 60000)], now: t0 + 31 * 60000 })!;
     expect(g.directionHit).toBe(true);
     expect(g.invalidated).toBe(false);
-    expect(g.exitBid).toBe(3.1);
-    expect(g.wouldHavePnlUsd).toBeCloseTo(100 * 1.1 - 1.5);
+    expect(g.exitBid).toBeCloseTo(3.05); // last bid at/before the horizon minus slippage (no look-ahead)
+    expect(g.wouldHavePnlUsd).toBeCloseTo(100 * 1.05 - 1.5);
     expect(g.provisional).toBe(false);
     // not yet due
     expect(gradeDecision({ record: r, path, chains: [], now: t0 + 5 * 60000 })).toBeNull();
@@ -35,7 +35,7 @@ describe("decision grading", () => {
     const path2 = [{ t: t0, p: 7400 }, { t: t0 + 5 * 60000, p: 7388 }, { t: t0 + 30 * 60000, p: 7420 }];
     const g2 = gradeDecision({ record: r, path: path2, chains: [chainWith(0.6, t0 + 5 * 60000), chainWith(5, t0 + 30 * 60000)], now: t0 + 31 * 60000 })!;
     expect(g2.invalidated).toBe(true);
-    expect(g2.exitBid).toBe(0.6);
+    expect(g2.exitBid).toBeCloseTo(0.55);
     expect(g2.wouldHavePnlUsd).toBeLessThan(0);
     const s = summarizeGrades([g, g2]);
     expect(s.n).toBe(2);

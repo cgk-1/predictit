@@ -159,6 +159,26 @@ export function syntheticFixture(date = "2026-11-06", hour = 11, minute = 5, opt
   const ctx = buildContext(frame, settings.engine, positions);
   const decision = decide({ ctx, positions, previous: null, realizedToday: 0 });
   const marks = positions.map((p) => markPosition(p, chain, spot, asOf));
+  const pack = (c: typeof ctx, d: typeof decision) => ({
+    instrument: c.instrument,
+    mode: c.mode,
+    quote: c.quote ?? null,
+    decision: d,
+    decisionAgeMs: 0,
+    regime: c.regime,
+    levels: c.levels,
+    bars: c.bars,
+    chainFeatures: c.chain,
+    gex: c.gex ? { ...c.gex, byStrike: c.gex.byStrike.filter((r) => Math.abs(r.strike / c.gex!.spot - 1) <= 0.05) } : null,
+    closing: d.closing,
+    mtf: c.mtf,
+    cross: c.cross,
+    notes: c.notes,
+    evaluatedAt: asOf,
+  });
+  const spxPack = pack(ctx, decision);
+  const ctxSpy = buildContext(frame, settings.engine, positions, "SPY");
+  const spyPack = pack(ctxSpy, decide({ ctx: ctxSpy, positions, previous: null, realizedToday: 0 }));
   const state: ServerState = {
     serverTime: asOf,
     clock: sessionClock(asOf),
@@ -176,13 +196,15 @@ export function syntheticFixture(date = "2026-11-06", hour = 11, minute = 5, opt
     vix: vix ?? null,
     tickFeatures: ctx.tick,
     grades: summarizeGrades([]),
+    indices: { NDX: { last: 26000, ret15: 0.0012 }, RUT: { last: 2400, ret15: -0.0004 }, VIX: { last: vix?.last ?? null, ret15: null } },
+    instruments: { SPX: spxPack, SPY: spyPack },
     decision,
     decisionAgeMs: 0,
     regime: ctx.regime,
     levels: ctx.levels,
-    bars: ctx.spxBars,
-    chainFeatures: ctx.spxChain,
-    gex: ctx.gex ? { ...ctx.gex, byStrike: ctx.gex.byStrike.filter((r) => Math.abs(r.strike / ctx.gex!.spot - 1) <= 0.05) } : null,
+    bars: ctx.bars,
+    chainFeatures: ctx.chain,
+    gex: spxPack.gex,
     closing: decision.closing,
     positions: positions.map((p) => ({ position: p, mark: marks.find((m) => m.id === p.id) ?? null })),
     realizedToday: -42.6,

@@ -2,6 +2,20 @@ import { PHASE_LABEL } from "@predictit/engine";
 import type { ServerState } from "../api/types";
 import type { ServerConnection } from "../api/useServerState";
 import { ModeBadge } from "./Badges";
+import { useInstrument } from "../api/context";
+
+export function InstrumentToggle() {
+  const [inst, setInst] = useInstrument();
+  return (
+    <div className="segmented" role="group" aria-label="Instrument">
+      {(["SPX", "SPY"] as const).map((i) => (
+        <button key={i} type="button" className={inst === i ? "active" : undefined} aria-pressed={inst === i} onClick={() => setInst(i)}>
+          {i}
+        </button>
+      ))}
+    </div>
+  );
+}
 import { FeedChips } from "./FeedHealth";
 import { fmtAgo, fmtMs, fmtTime } from "../lib/format";
 
@@ -29,6 +43,7 @@ export function StatusBar({ conn, now, menuOpen, onToggleMenu }: { conn: ServerC
       </button>
       <span className="topbar-brand">predictit</span>
       <div className="statusbar-group">
+        <InstrumentToggle />
         <ModeBadge mode={s?.mode ?? "NONE"} />
         <span className="clock" title={`Server time (ET), corrected for a client clock offset of ${Math.round(conn.offsetMs)} ms`}>
           <span>{fmtTime(now)}</span>

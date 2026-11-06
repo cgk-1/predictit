@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { api } from "../api/client";
-import { useServer, useServerNow } from "../api/context";
+import { useInstrument, useServer, useServerNow } from "../api/context";
 import { useFetch } from "../lib/useFetch";
 import { ChangesFeed } from "../components/ChangesFeed";
 import { Collapsible } from "../components/Collapsible";
@@ -21,15 +21,17 @@ export const PHONE_PX = 640;
 export function TodayView() {
   const { state: s, loading } = useServer();
   const now = useServerNow();
-  const bars = useFetch((sig) => api.bars("SPX", sig), "spx-bars", 30_000);
+  const [inst] = useInstrument();
+  const bars = useFetch((sig) => api.bars(inst, sig), `${inst}-bars`, 30_000);
   const minute = Math.floor(now / 60_000) * 60_000;
   const completed = useMemo(() => (bars.data?.bars ?? []).filter((b) => b.t + 60_000 <= minute), [bars.data, minute]);
 
   if (!s) {
     return <Empty>{loading ? "Connecting to the server…" : "No state received yet. The status bar shows the connection state; retrying automatically."}</Empty>;
   }
-  const spot = s.spx?.last ?? null;
-  const spotTime = s.spx?.quoteTime ?? null;
+  const q = inst === "SPY" ? s.spy : s.spx;
+  const spot = q?.last ?? null;
+  const spotTime = q?.quoteTime ?? null;
   const d = s.decision;
   return (
     <>
@@ -64,7 +66,7 @@ export function TodayView() {
           </Panel>
         </div>
         <Panel
-          title="SPX, 1-minute"
+          title={`${inst}, 1-minute`}
           meta={
             bars.data ? (
               <>

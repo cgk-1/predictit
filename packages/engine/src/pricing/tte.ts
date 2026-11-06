@@ -8,7 +8,7 @@
  */
 import { etParts } from "../time/et";
 import { sessionInfo, tradingDaysBetween } from "../time/calendar";
-import { pmSettlementMs, amSettlementMs, seriesSpec } from "../contracts/series";
+import { pmSettlementMs, amSettlementMs, seriesSpec, spyLastTradeMs } from "../contracts/series";
 import type { OptionRoot } from "../types";
 
 export type TimeConvention = "trading" | "calendar";
@@ -22,7 +22,7 @@ export function expiryInstantMs(root: OptionRoot, expiry: string): number {
   const key = `${root}|${expiry}`;
   const c = EXP_CACHE.get(key);
   if (c !== undefined) return c;
-  const v = seriesSpec(root).settlement === "AM" ? amSettlementMs(expiry) : pmSettlementMs(expiry);
+  const v = seriesSpec(root).settlement === "AM" ? amSettlementMs(expiry) : root === "SPY" ? spyLastTradeMs(expiry) : pmSettlementMs(expiry);
   if (EXP_CACHE.size > 5000) EXP_CACHE.clear();
   EXP_CACHE.set(key, v);
   return v;

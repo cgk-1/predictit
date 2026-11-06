@@ -37,12 +37,15 @@ export interface DecisionGrade {
 
 export interface GradeInputs {
   record: DecisionRecord;
-  /** SPX path from the decision instant to (at least) the horizon */
+  /** underlying path from the decision instant to (at least) the horizon */
   path: PricePoint[];
   /** chain snapshots received after the decision (sorted by receivedAt), used for exit bids */
   chains: Array<{ receivedAt: number; chain: ChainSnapshot }>;
   now: number;
   costs?: CostModel;
+  /** execution model mirrored from the replay harness: entry at ask + slippage after latency, exit at bid − slippage */
+  slippagePts?: number;
+  latencyMs?: number;
 }
 
 export function gradeDecision(i: GradeInputs): DecisionGrade | null {
@@ -51,11 +54,13 @@ export function gradeDecision(i: GradeInputs): DecisionGrade | null {
   if (!r.primary) return null;
   const horizonEnd = r.asOf + r.primary.horizonMinutes * 60_000;
   if (i.now < horizonEnd) return null;
-  const spot0 = r.summary?.contract ? undefined : undefined;
-  void spot0;
+  const slip = i.slippagePts ?? 0.05;
+  const latency = i.latencyMs ?? 2000;
   const p0 = i.path.find((p) => p.t >= r.asOf) ?? i.path[0];
-  const pH = [...i.path].reverse().find((p) => p.t <= horizonEnd + 120_000) ?? null;
+  // horizon price: the last point at or before the horizon, but no earlier than 2 minutes before it (else provisional)
+  const pH = [...i.path].reverse().find((p) => p.t <= horizonEnd + 5_000) ?? null;
   if (!p0 || !pH) return null;
+  const horizonPriceStale = pH.t < horizonEnd - 120_000;
   const direction = r.state === "CALL SETUP" ? "call" : "put";
   const inval = r.primary.invalidationLevel;
   let invalidated = false;
@@ -71,23 +76,25 @@ export function gradeDecision(i: GradeInputs): DecisionGrade | null {
   const contract = r.contracts.find((c) => c.eligible) ?? r.contracts[0] ?? null;
   let exitBid: number | null = null;
   let maxBid: number | null = null;
+  let entryAsk: number | null = contract ? contract.entry : null;
   if (contract) {
-    const exitAt = invalidated && invalidatedAt ? invalidatedAt : horizonEnd;
-    const after = i.chains.filter((c) => c.receivedAt >= r.asOf && c.receivedAt <= exitAt + 120_000);
-    for (const c of after) {
+    const exitAt = invalidated && invalidatedAt ? invalidatedAt + latency : horizonEnd;
+    // entry: first chain at/after decision + latency, at the ask plus slippage (falls back to the recorded ask)
+    const entryChain = i.chains.find((c) => c.receivedAt >= r.asOf + latency && c.receivedAt <= r.asOf + latency + 120_000);
+    const eq = entryChain?.chain.options.find((o) => o.osi === contract.osi);
+    if (eq && eq.ask > 0) entryAsk = eq.ask + slip;
+    // exit: the LAST chain at or before the exit instant (never a later one), at the bid minus slippage
+    const upToExit = i.chains.filter((c) => c.receivedAt >= r.asOf && c.receivedAt <= exitAt);
+    for (const c of upToExit) {
       const q = c.chain.options.find((o) => o.osi === contract.osi);
-      if (q && q.bid > 0) {
-        maxBid = Math.max(maxBid ?? 0, q.bid);
-        if (c.receivedAt >= exitAt - 120_000) exitBid = q.bid;
-      }
+      if (q && q.bid > 0) maxBid = Math.max(maxBid ?? 0, q.bid);
     }
-    if (exitBid === null && after.length) {
-      const lastQ = after[after.length - 1]!.chain.options.find((o) => o.osi === contract.osi);
-      if (lastQ && lastQ.bid > 0) exitBid = lastQ.bid;
-    }
+    const exitChain = [...upToExit].reverse().find((c) => c.receivedAt >= exitAt - 120_000);
+    const xq = exitChain?.chain.options.find((o) => o.osi === contract.osi);
+    if (xq && xq.bid > 0) exitBid = Math.max(0, xq.bid - slip);
   }
   const costs = i.costs ?? DEFAULT_COSTS;
-  const pnl = contract && exitBid !== null ? resalePnl({ entryPremium: contract.entry, exitPremium: exitBid, qty: 1, costs }).net : null;
+  const pnl = contract && exitBid !== null && entryAsk !== null ? resalePnl({ entryPremium: entryAsk, exitPremium: exitBid, qty: 1, costs }).net : null;
   const underlyingRetPct = pH.p / p0.p - 1;
   return {
     decisionId: r.id,
@@ -97,10 +104,10 @@ export function gradeDecision(i: GradeInputs): DecisionGrade | null {
     gradedAt: i.now,
     horizonMinutes: r.primary.horizonMinutes,
     osi: contract?.osi ?? null,
-    entryAsk: contract?.entry ?? null,
+    entryAsk,
     exitBid,
     maxBid,
-    wouldHaveRetPct: pnl !== null && contract ? pnl / (contract.entry * 100) : null,
+    wouldHaveRetPct: pnl !== null && entryAsk ? pnl / (entryAsk * 100) : null,
     wouldHavePnlUsd: pnl,
     spotAtDecision: p0.p,
     spotAtHorizon: pH.p,
@@ -108,7 +115,7 @@ export function gradeDecision(i: GradeInputs): DecisionGrade | null {
     directionHit: direction === "call" ? underlyingRetPct > 0 : underlyingRetPct < 0,
     invalidated,
     invalidatedAt,
-    provisional: exitBid === null,
+    provisional: exitBid === null || horizonPriceStale,
   };
 }
 

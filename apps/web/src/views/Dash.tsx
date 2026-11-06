@@ -90,8 +90,12 @@ export function DashView() {
   const d = s.decision;
   if (!d) return <Empty>No decision yet.</Empty>;
   const sm = d.summary;
-  const spot = s.spx?.last ?? null;
+  const instQuote = sm.instrument === "SPY" ? s.spy : s.spx;
+  const spot = instQuote?.last ?? null;
+  const dp = sm.instrument === "SPY" ? 2 : 1;
   const act = sm.action;
+  const hasSetup = act === "BUY CALL" || act === "BUY PUT";
+  void act;
   const cls = act === "BUY CALL" ? "call" : act === "BUY PUT" ? "put" : act === "WAIT" ? "wait" : act === "PASS" ? "pass" : "manage";
   const move = sm.expectedMove.toCloseSigmaPts;
   const horizon = sm.expectedMove.toHorizonSigmaPts;
@@ -106,16 +110,17 @@ export function DashView() {
   return (
     <div className="dash">
       <div className="dash-row dash-row-top">
-        <Tile label="Action" className={`dash-action state-${cls}`} value={act} sub={primary ? `${primary.name} · ${primary.lifecycle}` : inClosing ? "closing window" : "—"} />
-        <Tile label="Lean" className={`dash-lean dash-lean-${sm.direction.toLowerCase()}`} value={sm.direction} sub={`${sm.strength} · ${Math.round(sm.agreement * 100)}% agree · ${d.lean.weightsMode === "learned" ? "learned" : "prior"}`} />
+        <Tile label={`Action · ${sm.instrument ?? "SPX"}`} className={`dash-action state-${cls}`} value={act} sub={primary ? `${primary.name} · ${primary.lifecycle}` : inClosing ? "closing window" : "—"} />
+        <Tile label="Lean" className={`dash-lean dash-lean-${sm.direction.toLowerCase()}`} value={sm.direction} sub={`${sm.strength} · ${Math.round(sm.agreement * 100)}% agree · ${d.lean.weightsMode === "learned" ? "learned weights" : "prior weights"}`} />
         <Tile
-          label="Expected move"
-          value={move !== null ? `±${fmtPts(move)}` : "n/a"}
+          label="Expected move to close (1σ)"
+          value={move !== null ? `±${fmtPts(move, dp)}` : "n/a"}
           sub={
             <>
-              {spot !== null && move !== null ? <span className="mono">{fmtPts(spot - move)} – {fmtPts(spot + move)} to close</span> : null}
-              {horizon !== null && sm.expectedMove.horizonMinutes ? <span className="mono"> · ±{fmtPts(horizon)} / {sm.expectedMove.horizonMinutes}m</span> : null}
-              {sm.expectedMove.straddleAbsMoveToClose !== null ? <span className="mono"> · straddle {fmtPts(sm.expectedMove.straddleAbsMoveToClose)}</span> : null}
+              {spot !== null && move !== null ? <span className="mono">{fmtPts(spot - move, dp)} – {fmtPts(spot + move, dp)}</span> : null}
+              {horizon !== null && sm.expectedMove.horizonMinutes ? <span className="mono"> · ±{fmtPts(horizon, dp)} / {sm.expectedMove.horizonMinutes}m (1σ)</span> : null}
+              {sm.expectedMove.straddleAbsMoveToClose !== null ? <span className="mono"> · straddle E|move| {fmtPts(sm.expectedMove.straddleAbsMoveToClose, dp)}</span> : null}
+              {sm.expectedMove.consumedPct !== null && sm.expectedMove.consumedPct !== undefined ? <span className="mono"> · {Math.round(sm.expectedMove.consumedPct * 100)}% of open-anchored EM used</span> : null}
             </>
           }
         />
@@ -123,12 +128,26 @@ export function DashView() {
       </div>
 
       <div className="dash-row dash-row-contract">
-        <Tile label={`Contract${c ? ` · ${c.instrument}` : ""}`} className="dash-contract" value={c ? c.label.replace(/ \(Δ.*\)$/, "") : "—"} sub={c ? <span className="mono">{fmtNum(c.bid)} / {fmtNum(c.ask)} · risk {fmtUsd(c.riskUsd)} · BE {fmtPts(c.breakeven)} · {c.riskUsd <= budget ? "in budget" : `over $${budget}`}</span> : reason ? <span className="muted">{reason}</span> : "no contract"} />
-        <Tile label="Entry" value={primary?.entryZone ? <span className="mono">{fmtPts(primary.entryZone.low)}–{fmtPts(primary.entryZone.high)}</span> : closing?.recommendation.contract ? <span className="mono">≤ {fmtNum(closing.recommendation.contract.ask)}</span> : "—"} />
-        <Tile label="Invalidation" className="dash-inval" value={primary ? <span className="mono">{fmtPts(primary.invalidationLevel)}</span> : closing?.recommendation.strike ? <span className="mono">{closing.recommendation.strike}</span> : "—"} />
-        <Tile label="Target" value={primary?.targetLevel ? <span className="mono">{fmtPts(primary.targetLevel)}</span> : "—"} />
-        <Tile label="Exit" value={primary ? `${primary.horizonMinutes}m` : closing?.recommendation.mode ? (closing.recommendation.mode === "resale" ? "resale" : "settle") : "—"} sub={primary ? "time stop" : closing?.recommendation.mode === "resale" ? "before close" : closing?.recommendation.mode ? "hold to settlement" : ""} />
+        <Tile label={`Contract${c ? ` · ${c.instrument}` : ""}`} className="dash-contract" value={c ? c.label.replace(/ \(Δ.*\)$/, "") : "—"} sub={c ? <span className="mono">{fmtNum(c.bid)} / {fmtNum(c.ask)} · risk {fmtUsd(c.riskUsd)} · BE {fmtPts(c.breakeven, dp)} · {c.riskUsd <= budget ? "in budget" : `over $${budget}`}</span> : reason ? <span className="muted">{reason}</span> : "no contract"} />
+        <Tile label={`Entry (${sm.instrument})`} value={hasSetup && primary?.entryZone ? <span className="mono">{fmtPts(primary.entryZone.low, dp)}–{fmtPts(primary.entryZone.high, dp)}</span> : hasSetup && closing?.recommendation.contract ? <span className="mono">ask ≤ {fmtNum(closing.recommendation.contract.ask)}</span> : "—"} />
+        <Tile label={`Invalidation (${sm.instrument})`} className="dash-inval" value={hasSetup && primary ? <span className="mono">{fmtPts(primary.invalidationLevel, dp)}</span> : hasSetup && closing?.recommendation.strike ? <span className="mono">{closing.recommendation.strike}</span> : "—"} />
+        <Tile label="Target" value={hasSetup && primary?.targetLevel ? <span className="mono">{fmtPts(primary.targetLevel, dp)}</span> : "—"} />
+        <Tile label="Exit" value={hasSetup && primary ? `${primary.horizonMinutes}m` : hasSetup && closing?.recommendation.mode ? (closing.recommendation.mode === "resale" ? "resale" : "settle") : "—"} sub={hasSetup && primary ? "time stop" : hasSetup && closing?.recommendation.mode === "resale" ? "before close" : hasSetup && closing?.recommendation.mode ? "hold to settlement" : ""} />
       </div>
+      {hasSetup && (c || sm.whenToSell.length) ? (
+        <div className="dash-row dash-row-plan">
+          <Tile label="Entry condition">
+            <div className="dash-sub">{c?.entryCondition ?? "—"}</div>
+          </Tile>
+          <Tile label="When to sell">
+            <ul className="dash-list">
+              {sm.whenToSell.slice(0, 3).map((x, i) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
+          </Tile>
+        </div>
+      ) : null}
 
       <div className="dash-row dash-row-levels">
         <Levels label="Resistance" levels={sm.resistance} kind="resistance" />
@@ -136,6 +155,16 @@ export function DashView() {
       </div>
 
       <div className="dash-row dash-row-facts">
+        <Tile label={`Indices 15m · ${sm.cross?.label ?? "n/a"}`}>
+          <div className="dash-facts">
+            {Object.entries(s.indices ?? {}).map(([k, v]) => (
+              <span key={k}>
+                <b>{k}</b> <span className={`mono ${v.ret15 === null ? "" : v.ret15 >= 0 ? "pos" : "neg"}`}>{v.ret15 === null ? "—" : `${v.ret15 >= 0 ? "+" : ""}${(v.ret15 * 100).toFixed(2)}%`}</span>
+              </span>
+            ))}
+            {!Object.keys(s.indices ?? {}).length ? <span className="muted">needs Schwab live</span> : null}
+          </div>
+        </Tile>
         <Tile label="Timeframes">
           <TimeframesCompact mtf={sm.timeframes} />
         </Tile>
@@ -158,7 +187,11 @@ export function DashView() {
       {(closing || pos) && (
         <div className="dash-row dash-row-extra">
           {closing && (
-            <Tile label={`Closing window · ${closing.subWindow}`} className={`dash-closing state-${stateClass(closing.recommendation.state === "CALL SETUP" || closing.recommendation.state === "PUT SETUP" ? closing.recommendation.state : closing.recommendation.state === "WAIT" ? "WAIT" : "PASS")}`} value={closing.recommendation.state} sub={closing.recommendation.contract ? <span className="mono">{closing.recommendation.contract.osi.trim()} ≤ {fmtNum(closing.recommendation.contract.ask)} · {closing.recommendation.mode} · σ {fmtPts(closing.remaining.sigmaUsedPts)}</span> : closing.passReasons[0] ?? closing.recommendation.rationale[0] ?? ""} />
+            closing.subWindow === "pre" ? (
+              <Tile label="Closing window" value="not open" sub={<span className="mono">opens 15:50 ET · σ to close {fmtPts(closing.remaining.sigmaUsedPts)}</span>} />
+            ) : (
+              <Tile label={`Closing window · ${closing.subWindow}`} className={`dash-closing state-${stateClass(closing.recommendation.state === "CALL SETUP" || closing.recommendation.state === "PUT SETUP" ? closing.recommendation.state : closing.recommendation.state === "WAIT" ? "WAIT" : "PASS")}`} value={closing.recommendation.state} sub={closing.recommendation.contract ? <span className="mono">{closing.recommendation.contract.osi.trim()} ≤ {fmtNum(closing.recommendation.contract.ask)} · {closing.recommendation.mode} · σ {fmtPts(closing.remaining.sigmaUsedPts)} · needs {fmtPts(closing.recommendation.contract.requiredMovePts)}</span> : closing.passReasons[0] ?? closing.recommendation.rationale[0] ?? ""} />
+            )
           )}
           {pos && (
             <Tile label="Position" className="dash-position" value={<span className="mono">{pos.position.osi.trim()} ×{pos.position.qty}</span>} sub={<span className="mono">in {fmtNum(pos.position.entryPremium)} · bid {fmtNum(pos.mark?.bid ?? null)} · P&L {fmtUsd(pos.mark?.unrealizedUsd ?? null)}{pos.mark?.exitSignal ? ` · EXIT: ${pos.mark.exitSignal.reason}` : ""}</span>} />

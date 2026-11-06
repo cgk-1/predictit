@@ -78,7 +78,7 @@ describe("apiFetch", () => {
     await api.replay("2026-11-06", 1762459800000);
     await api.bars("SPY");
     await api.positions();
-    expect(fetchMock.mock.calls[0]![0]).toBe("/api/replay?date=2026-11-06&at=1762459800000");
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/replay?date=2026-11-06&at=1762459800000&instrument=SPX");
     expect(fetchMock.mock.calls[1]![0]).toBe("/api/bars?symbol=SPY");
     expect(fetchMock.mock.calls[2]![0]).toBe("/api/positions");
   });

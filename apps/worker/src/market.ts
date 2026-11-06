@@ -49,14 +49,14 @@ import {
   gradeDecision,
   summarizeGrades,
   gradeClosingDecision,
-  initialClosingLearner,
-  updateClosingLearner,
+  learnerFromGrades,
   applyClosingLearning,
   closingLearnerSummary,
   tickFeatures,
   type DecisionGrade,
   type ClosingGrade,
   type ClosingLearnerState,
+  type Instrument,
   scorePredictions,
   leanStats,
   DEFAULT_ENSEMBLE_CONFIG,
@@ -120,7 +120,15 @@ interface Tick {
   mode: string;
 }
 
-const SNAP_KINDS = ["spxChain", "spyChain", "spxBars", "spyBars", "spxQuote", "spyQuote", "esQuote", "tickQuote", "vixQuote", "tickBars"] as const;
+const SNAP_KINDS = ["spxChain", "spyChain", "spxChainBroad", "spyChainBroad", "spxBars", "spyBars", "spxQuote", "spyQuote", "esQuote", "tickQuote", "vixQuote", "tickBars", "indexBars"] as const;
+const EXTRA_INDICES: Array<{ schwab: string; key: string }> = [
+  { schwab: "$NDX", key: "NDX" },
+  { schwab: "$RUT", key: "RUT" },
+  { schwab: "$DJI", key: "DJI" },
+  { schwab: "QQQ", key: "QQQ" },
+  { schwab: "IWM", key: "IWM" },
+  { schwab: "RSP", key: "RSP" },
+];
 
 async function gzip(text: string): Promise<ArrayBuffer> {
   const cs = new CompressionStream("gzip");
@@ -155,8 +163,18 @@ export class MarketSession extends DurableObject<Env> {
   private settings: AppSettings | null = null;
   private tokens: SchwabTokens | null | undefined = undefined;
   private latest: Partial<Record<(typeof SNAP_KINDS)[number], { receivedAt: number; payload: ChainSnapshot | BarSeries | IndexQuote }>> = {};
-  private lastDecision: DecisionRecord | null = null;
-  private lastCtx: EngineContext | null = null;
+  private lastDecisionBy: Record<Instrument, DecisionRecord | null> = { SPX: null, SPY: null };
+  private lastCtxBy: Record<Instrument, EngineContext | null> = { SPX: null, SPY: null };
+  private lastEvalBy: Record<Instrument, { rec: DecisionRecord; ctx: EngineContext; at: number } | null> = { SPX: null, SPY: null };
+  private get lastDecision(): DecisionRecord | null {
+    return this.lastDecisionBy.SPX;
+  }
+  private get lastCtx(): EngineContext | null {
+    return this.lastCtxBy.SPX;
+  }
+  private get lastEval() {
+    return this.lastEvalBy.SPX;
+  }
   private changes: ChangeEvent[] = [];
   private feeds: Record<string, FeedHealth> = {
     schwab: { source: "schwab", lastOkAt: null, lastErrorAt: null, lastError: null, lastLatencyMs: null, consecutiveErrors: 0 },
@@ -176,6 +194,11 @@ export class MarketSession extends DurableObject<Env> {
   private pending: PendingPrediction[] = [];
   private lastPredictionMinute = 0;
   private storedCreds: { clientId: string; clientSecret: string } | null = null;
+  /** Discord webhook URL (write-only; never returned to clients). */
+  private discordWebhook: string | null = null;
+  private alertKeys: Record<Instrument, string> = { SPX: "", SPY: "" };
+  private alertLastSentAt: number | null = null;
+  private alertLastError: string | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -224,6 +247,8 @@ export class MarketSession extends DurableObject<Env> {
     this.weights = storedWeights ? reconcileWeights(storedWeights) : null;
     this.pending = (await this.ctx.storage.get<PendingPrediction[]>("pendingPredictions")) ?? [];
     this.storedCreds = (await this.ctx.storage.get<{ clientId: string; clientSecret: string }>("schwabCreds")) ?? null;
+    this.discordWebhook = (await this.ctx.storage.get<string>("discordWebhook")) ?? null;
+    this.alertKeys = (await this.ctx.storage.get<Record<Instrument, string>>("alertKeys")) ?? { SPX: "", SPY: "" };
     const ops = await this.ctx.storage.get<{ ticks: Tick[]; feeds: Record<string, FeedHealth>; lastChainFetch: Record<string, number>; lastHistoryFetch: number; lastPredictionMinute: number }>("ops");
     if (ops) {
       this.ticks = ops.ticks ?? [];
@@ -235,13 +260,17 @@ export class MarketSession extends DurableObject<Env> {
     const today = etDate(Date.now());
     const rows = this.sql.exec<{ at: number; kind: string; text: string }>(`SELECT at, kind, text FROM changes WHERE date = ? ORDER BY id DESC LIMIT 100`, today).toArray();
     this.changes = rows.reverse().map((r) => ({ at: r.at, kind: r.kind as ChangeEvent["kind"], text: r.text }));
-    const dec = this.sql.exec<{ body: string }>(`SELECT body FROM decisions WHERE date = ? ORDER BY as_of DESC LIMIT 1`, today).toArray()[0];
-    if (dec) this.lastDecision = JSON.parse(dec.body);
+    for (const inst of ["SPX", "SPY"] as const) {
+      const dec = this.sql.exec<{ body: string }>(`SELECT body FROM decisions WHERE date = ? AND id LIKE ? ORDER BY as_of DESC LIMIT 1`, today, `dec_${inst}_%`).toArray()[0];
+      if (dec) this.lastDecisionBy[inst] = JSON.parse(dec.body);
+    }
     // reload latest snapshots of today so a restart does not lose context
     for (const kind of SNAP_KINDS) {
       const r = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = ? ORDER BY received_at DESC LIMIT 1`, today, kind).toArray()[0];
       if (r) this.latest[kind] = { receivedAt: r.received_at, payload: JSON.parse(await gunzip(r.body)) };
     }
+    const ib = this.latest["indexBars"]?.payload as unknown as Record<string, { bars: Bar1m[] }> | undefined;
+    if (ib) for (const [k, v] of Object.entries(ib)) this.indexBars.set(k, [...v.bars]);
     // rebuild live bar buffers from the latest stored series so quote-built bars continue after a restart
     for (const [kind, sym] of [["spxBars", "SPX"], ["spyBars", "SPY"]] as const) {
       const b = this.latest[kind]?.payload as BarSeries | undefined;
@@ -275,6 +304,75 @@ export class MarketSession extends DurableObject<Env> {
     await this.ctx.storage.put("schwabCreds", this.storedCreds);
     this.schwabLastError = null;
     return this.schwabStatus();
+  }
+
+  // ---------- alerts ----------
+  alertsStatus(): { discord: boolean; lastSentAt: number | null; lastError: string | null } {
+    return { discord: !!this.discordWebhook, lastSentAt: this.alertLastSentAt, lastError: this.alertLastError };
+  }
+
+  /** Write-only. An empty string clears the webhook. Only Discord webhook URLs are accepted. */
+  async setDiscordWebhook(url: string): Promise<ReturnType<MarketSession["alertsStatus"]>> {
+    const u = url.trim();
+    if (u === "") {
+      this.discordWebhook = null;
+      await this.ctx.storage.delete("discordWebhook");
+      this.alertLastError = null;
+      return this.alertsStatus();
+    }
+    if (!/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+$/.test(u)) throw new Error("not a Discord webhook URL");
+    this.discordWebhook = u;
+    await this.ctx.storage.put("discordWebhook", u);
+    this.alertLastError = null;
+    this.ctx.waitUntil(this.postDiscord("predictit alerts connected. One line per setup change (SPX and SPY)."));
+    return this.alertsStatus();
+  }
+
+  private async postDiscord(content: string): Promise<void> {
+    if (!this.discordWebhook) return;
+    try {
+      const res = await fetch(this.discordWebhook, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: content.slice(0, 1900), username: "predictit", allowed_mentions: { parse: [] } }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`discord ${res.status}`);
+      this.alertLastSentAt = Date.now();
+      this.alertLastError = null;
+    } catch (e) {
+      this.alertLastError = (e as Error).message;
+    }
+  }
+
+  /** One terse line per setup change. Keyed on action+contract so repeated ticks do not re-send; WAIT<->PASS flips are not alerted. */
+  private async maybeAlert(inst: Instrument, rec: DecisionRecord): Promise<void> {
+    if (!this.discordWebhook) return;
+    const sm = rec.summary;
+    if (!sm) return;
+    const active = sm.action === "BUY CALL" || sm.action === "BUY PUT" || sm.action === "MANAGE";
+    const key = active ? `${sm.action}|${sm.contract?.osi ?? ""}` : "";
+    const prev = this.alertKeys[inst] ?? "";
+    if (key === prev) return;
+    this.alertKeys[inst] = key;
+    await this.ctx.storage.put("alertKeys", this.alertKeys);
+    const t = fmtEtTime(rec.asOf);
+    let line: string;
+    if (active) {
+      const c = sm.contract;
+      const parts = [
+        `${inst} · ${sm.action}`,
+        c ? `${c.label} ask ${c.ask.toFixed(2)} (risk $${Math.round(c.riskUsd)})` : null,
+        sm.expectedMove.toCloseSigmaPts !== null ? `1σ→close ±${sm.expectedMove.toCloseSigmaPts.toFixed(inst === "SPY" ? 2 : 0)}` : null,
+        sm.whenToSell[0] ?? null,
+        rec.mode,
+        `${t} ET`,
+      ];
+      line = parts.filter(Boolean).join(" · ");
+    } else {
+      line = `${inst} · setup off → ${sm.action} · ${rec.mode} · ${t} ET`;
+    }
+    this.ctx.waitUntil(this.postDiscord(line));
   }
 
   schwabStatus(): SchwabStatus {
@@ -400,7 +498,7 @@ export class MarketSession extends DurableObject<Env> {
     try {
       const o = { accessToken: token };
       // quotes every tick
-      const q = await schwabApi.quotes(["$SPX", "SPY", "$TICK", "$VIX"], o);
+      const q = await schwabApi.quotes(["$SPX", "SPY", "$TICK", "$VIX", ...EXTRA_INDICES.map((x) => x.schwab)], o);
       // diagnostics: which symbols came back and any per-symbol errors (Schwab reports unknown symbols under "errors")
       this.quoteDiag = { keys: Object.keys(q.raw), errors: (q.raw as any).errors ?? null, at: q.receivedAt, sample: Object.fromEntries(["$TICK", "$VIX"].map((k) => [k, q.raw[k] ? Object.keys(q.raw[k]) : null])) };
       const spx = q.raw["$SPX"] ? parseSchwabQuote("$SPX", q.raw["$SPX"], q.receivedAt) : null;
@@ -413,7 +511,21 @@ export class MarketSession extends DurableObject<Env> {
         const tb = this.liveBars.get("TICK");
         if (tb?.length) await this.storeSnapshot("tickBars", { symbol: "TICK", bars: tb, stamp: { source: "schwab", mode: "LIVE", observedAt: now, receivedAt: now } }, now, now, "schwab", "LIVE", true);
       }
-      if (vix && Number.isFinite(vix.last)) await this.storeSnapshot("vixQuote", vix, vix.quoteTime, q.receivedAt, "schwab", "LIVE", true);
+      if (vix && Number.isFinite(vix.last)) {
+        await this.storeSnapshot("vixQuote", vix, vix.quoteTime, q.receivedAt, "schwab", "LIVE", true);
+        this.appendIndexBar("VIX", vix.last, vix.quoteTime);
+      }
+      for (const x of EXTRA_INDICES) {
+        const e = q.raw[x.schwab];
+        if (!e) continue;
+        const iq = parseSchwabQuote(x.schwab, e, q.receivedAt);
+        if (Number.isFinite(iq.last)) this.appendIndexBar(x.key, iq.last, iq.quoteTime);
+      }
+      if (this.indexBars.size) {
+        const payload: Record<string, { bars: Bar1m[]; last?: number }> = {};
+        for (const [k, v] of this.indexBars) payload[k] = { bars: v, last: v[v.length - 1]?.c };
+        await this.storeSnapshot("indexBars", payload as unknown as BarSeries, now, now, "schwab", "LIVE", true);
+      }
       if (spx) {
         await this.storeSnapshot("spxQuote", spx, spx.quoteTime, q.receivedAt, "schwab", "LIVE", true);
         this.appendLiveBar("SPX", spx);
@@ -439,6 +551,18 @@ export class MarketSession extends DurableObject<Env> {
         const chain = parseSchwabChain(c.raw, c.receivedAt);
         if (chain.options.length) await this.storeSnapshot("spyChain", chain, chain.stamp.observedAt, c.receivedAt, "schwab", "LIVE", true);
         this.lastChainFetch["spy"] = now;
+      }
+      // broad chains for GEX (±~6% / 45 days) every 5 minutes; execution keeps using the near chains above
+      if (now - (this.lastChainFetch["broad"] ?? 0) >= 5 * 60_000) {
+        const today = etDate(now);
+        const to = new Date(now + 45 * 86400000).toISOString().slice(0, 10);
+        const cs = await schwabApi.chain("$SPX", { strikeCount: 120, fromDate: today, toDate: to }, o);
+        const bs = parseSchwabChain(cs.raw, cs.receivedAt);
+        if (bs.options.length) await this.storeSnapshot("spxChainBroad", bs, bs.stamp.observedAt, cs.receivedAt, "schwab", "LIVE", false);
+        const cy = await schwabApi.chain("SPY", { strikeCount: 80, fromDate: today, toDate: to }, o);
+        const by = parseSchwabChain(cy.raw, cy.receivedAt);
+        if (by.options.length) await this.storeSnapshot("spyChainBroad", by, by.stamp.observedAt, cy.receivedAt, "schwab", "LIVE", false);
+        this.lastChainFetch["broad"] = now;
       }
       // minute history backfill every 5 min (and on first tick) to seed bars
       if (now - this.lastHistoryFetch >= 5 * 60_000) {
@@ -470,6 +594,21 @@ export class MarketSession extends DurableObject<Env> {
       // fall back to Cboe for this tick so the terminal keeps a (delayed) picture
       await this.pollCboe(now);
     }
+  }
+
+  private indexBars: Map<string, Bar1m[]> = new Map();
+
+  private appendIndexBar(key: string, last: number, t: number) {
+    const bars = this.indexBars.get(key) ?? [];
+    const minute = Math.floor(t / 60_000) * 60_000;
+    const prev = bars[bars.length - 1];
+    if (prev && prev.t === minute) {
+      prev.h = Math.max(prev.h, last);
+      prev.l = Math.min(prev.l, last);
+      prev.c = last;
+    } else if (!prev || minute > prev.t) bars.push({ t: minute, o: last, h: last, l: last, c: last, v: null });
+    if (bars.length > 1200) bars.splice(0, bars.length - 1200);
+    this.indexBars.set(key, bars);
   }
 
   private appendLiveBar(symbol: "SPX" | "SPY" | "TICK", q: IndexQuote) {
@@ -558,6 +697,8 @@ export class MarketSession extends DurableObject<Env> {
     const g = <T,>(k: (typeof SNAP_KINDS)[number]) => this.latest[k]?.payload as T | undefined;
     f.spxChain = g<ChainSnapshot>("spxChain");
     f.spyChain = g<ChainSnapshot>("spyChain");
+    f.spxChainBroad = g<ChainSnapshot>("spxChainBroad");
+    f.spyChainBroad = g<ChainSnapshot>("spyChainBroad");
     f.spxBars = g<BarSeries>("spxBars");
     f.spyBars = g<BarSeries>("spyBars");
     f.spx = g<IndexQuote>("spxQuote");
@@ -566,6 +707,8 @@ export class MarketSession extends DurableObject<Env> {
     f.tick = g<IndexQuote>("tickQuote");
     f.vix = g<IndexQuote>("vixQuote");
     f.tickBars = g<BarSeries>("tickBars");
+    const ib = this.latest["indexBars"]?.payload as unknown as Record<string, { bars: Bar1m[]; last?: number }> | undefined;
+    if (ib) f.indices = ib;
     // prior-day levels from bars of the previous session, if present
     const bars = f.spxBars?.bars ?? [];
     const today = etDate(now);
@@ -585,65 +728,83 @@ export class MarketSession extends DurableObject<Env> {
     const frame = this.currentFrame(now);
     const positions = this.openPositions();
     const settings = this.getSettings().engine;
-    const ctx = buildContext(frame, settings, positions);
-    const realizedToday = this.realizedToday(ctx.today);
-    // score due predictions first (uses only the as-of price path), then decide with the updated weights
-    const weights0 = this.weights ?? initialWeights(now);
-    const scoredRes = scorePredictions(this.pending, ctx.spxPath, now, weights0, DEFAULT_ENSEMBLE_CONFIG);
-    if (scoredRes.scored.length || scoredRes.pending.length !== this.pending.length) {
-      for (const sp of scoredRes.scored) this.sql.exec(`INSERT OR REPLACE INTO predictions (id, at, date, horizon_min, score, outcome, hit, ret, body) VALUES (?,?,?,?,?,?,?,?,?)`, sp.id, sp.at, etDate(sp.at), sp.horizonMin, sp.score, sp.outcome, sp.hit === null ? null : sp.hit ? 1 : 0, sp.ret, JSON.stringify(sp));
-      this.pending = scoredRes.pending;
+    const learnedClosing = applyClosingLearning(this.getSettings().closing, this.closingLearner);
+    let weights = this.weights ?? initialWeights(now);
+    let weightsChanged = !this.weights;
+    const minute = Math.floor(now / 60_000);
+    let madePredictions = false;
+    let spxRec: DecisionRecord | null = null;
+    for (const inst of ["SPX", "SPY"] as const) {
+      const ctx = buildContext(frame, settings, positions, inst);
+      if (inst === "SPY" && !ctx.quote && !ctx.rawBars.length) {
+        this.lastEvalBy.SPY = null;
+        continue;
+      }
+      // score this instrument's due predictions against its own price path, then decide with the updated weights
+      const mine = this.pending.filter((p) => (p.instrument ?? "SPX") === inst);
+      const others = this.pending.filter((p) => (p.instrument ?? "SPX") !== inst);
+      const scoredRes = scorePredictions(mine, ctx.path, now, weights, DEFAULT_ENSEMBLE_CONFIG);
+      if (scoredRes.scored.length || scoredRes.pending.length !== mine.length) {
+        for (const sp of scoredRes.scored) this.sql.exec(`INSERT OR REPLACE INTO predictions (id, at, date, horizon_min, score, outcome, hit, ret, body) VALUES (?,?,?,?,?,?,?,?,?)`, sp.id, sp.at, etDate(sp.at), sp.horizonMin, sp.score, sp.outcome, sp.hit === null ? null : sp.hit ? 1 : 0, sp.ret, JSON.stringify(sp));
+        this.pending = [...others, ...scoredRes.pending];
+        await this.ctx.storage.put("pendingPredictions", this.pending);
+      }
+      if (scoredRes.scored.length) {
+        weights = scoredRes.weights;
+        weightsChanged = true;
+      }
+      const realizedToday = this.realizedToday(ctx.today);
+      const rec = decide({ ctx, positions, previous: this.lastDecisionBy[inst], realizedToday, weights, closingSettings: learnedClosing });
+      if (inst === "SPX") spxRec = rec;
+      // one prediction set per minute per instrument during the regular session
+      if (ctx.clock.isRegularSession && minute % 5 === 0 && minute !== this.lastPredictionMinute && ctx.quote && ctx.mode !== "NONE") {
+        const preds = makePredictions(rec.lean, ctx.quote.last, DEFAULT_ENSEMBLE_CONFIG, inst).filter((p) => p.dueAt <= ctx.clock.session.closeMs + 60_000);
+        this.pending.push(...preds);
+        madePredictions = true;
+        for (const p of preds) this.sql.exec(`INSERT OR IGNORE INTO predictions (id, at, date, horizon_min, score, outcome, hit, ret, body) VALUES (?,?,?,?,?,?,?,?,?)`, p.id, p.at, etDate(p.at), p.horizonMin, p.score, null, null, null, JSON.stringify(p));
+      }
+      const events = diffDecisions(this.lastDecisionBy[inst], rec, this.lastCtxBy[inst], ctx);
+      for (const e of events) this.recordChange(inst === "SPX" ? e : { ...e, text: e.text.replace(/^(\d\d:\d\d(?::\d\d)?) /, "$1 SPY · ") });
+      if (shouldPersist(this.lastDecisionBy[inst], rec)) {
+        this.sql.exec(`INSERT OR IGNORE INTO decisions (id, version, as_of, date, state, mode, body) VALUES (?,?,?,?,?,?,?)`, rec.id, rec.version, rec.asOf, rec.date, rec.state, rec.mode, JSON.stringify(rec));
+        this.lastDecisionBy[inst] = rec;
+      }
+      await this.maybeAlert(inst, rec);
+      this.lastCtxBy[inst] = ctx;
+      this.lastEvalBy[inst] = { rec, ctx, at: now };
+    }
+    if (madePredictions) {
+      this.lastPredictionMinute = minute;
       await this.ctx.storage.put("pendingPredictions", this.pending);
     }
-    if (scoredRes.scored.length) {
-      this.weights = scoredRes.weights;
-      await this.ctx.storage.put("ensembleWeights", this.weights);
-    } else if (!this.weights) {
-      this.weights = weights0;
+    if (weightsChanged) {
+      this.weights = weights;
       await this.ctx.storage.put("ensembleWeights", this.weights);
     }
-    const learnedClosing = applyClosingLearning(this.getSettings().closing, this.closingLearner);
-    const rec = decide({ ctx, positions, previous: this.lastDecision, realizedToday, weights: this.weights, closingSettings: learnedClosing });
+    // position bookkeeping: update high bids and persist (marks use each position's own chain)
+    if (spxRec) {
+      for (const p of positions) {
+        const m = spxRec.positions.find((x) => x.id === p.id);
+        const upd = observeBid(p, m?.bid ?? null);
+        if (upd !== p) this.savePosition(upd);
+      }
+    }
     // continuous self-grading of past recommendations (every 60 s)
     if (now - this.lastGradeSweep >= 60_000) {
       this.lastGradeSweep = now;
       try {
-        await this.gradeSweep(now, ctx.today);
+        await this.gradeSweep(now, etDate(now));
       } catch (e) {
         this.recordChange({ at: now, kind: "data", text: `Grading sweep failed: ${(e as Error).message}` });
       }
     }
-    // one prediction set per minute during the regular session
-    const minute = Math.floor(now / 60_000);
-    if (ctx.clock.isRegularSession && minute !== this.lastPredictionMinute && ctx.frame.spx && ctx.mode !== "NONE") {
-      const preds = makePredictions(rec.lean, ctx.frame.spx.last).filter((p) => p.dueAt <= ctx.clock.session.closeMs + 60_000);
-      this.pending.push(...preds);
-      this.lastPredictionMinute = minute;
-      for (const p of preds) this.sql.exec(`INSERT OR IGNORE INTO predictions (id, at, date, horizon_min, score, outcome, hit, ret, body) VALUES (?,?,?,?,?,?,?,?,?)`, p.id, p.at, etDate(p.at), p.horizonMin, p.score, null, null, null, JSON.stringify(p));
-      await this.ctx.storage.put("pendingPredictions", this.pending);
-    }
-    // position bookkeeping: update high bids and persist
-    for (const p of positions) {
-      const m = rec.positions.find((x) => x.id === p.id);
-      const upd = observeBid(p, m?.bid ?? null);
-      if (upd !== p) this.savePosition(upd);
-    }
-    const events = diffDecisions(this.lastDecision, rec, this.lastCtx, ctx);
-    for (const e of events) this.recordChange(e);
-    if (shouldPersist(this.lastDecision, rec)) {
-      this.sql.exec(`INSERT OR IGNORE INTO decisions (id, version, as_of, date, state, mode, body) VALUES (?,?,?,?,?,?,?)`, rec.id, rec.version, rec.asOf, rec.date, rec.state, rec.mode, JSON.stringify(rec));
-      this.lastDecision = rec;
-    }
-    this.lastCtx = ctx;
-    this.lastEval = { rec, ctx, at: now };
   }
 
-  private lastEval: { rec: DecisionRecord; ctx: EngineContext; at: number } | null = null;
   private gradesCache: { at: number; value: ReturnType<typeof summarizeGrades> } | null = null;
 
   private gradesSummaryCached(now: number) {
     if (this.gradesCache && now - this.gradesCache.at < 30_000) return this.gradesCache.value;
-    const grades = this.sql.exec<{ body: string }>(`SELECT body FROM grades ORDER BY graded_at DESC LIMIT 500`).toArray().map((r) => JSON.parse(r.body) as DecisionGrade);
+    const grades = this.sql.exec<{ body: string }>(`SELECT body FROM grades WHERE hit IS NOT NULL ORDER BY graded_at DESC LIMIT 500`).toArray().map((r) => JSON.parse(r.body) as DecisionGrade);
     const value = summarizeGrades(grades);
     this.gradesCache = { at: now, value };
     return value;
@@ -734,22 +895,36 @@ export class MarketSession extends DurableObject<Env> {
       .toArray()
       .map((r) => JSON.parse(r.body) as DecisionRecord)
       .filter((r) => r.primary && now >= r.asOf + r.primary.horizonMinutes * 60_000);
-    if (due.length) {
-      const first = Math.min(...due.map((r) => r.asOf));
-      const quotes = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = 'spxQuote' AND received_at >= ? ORDER BY received_at`, today, first - 60_000).toArray();
+    for (const inst of ["SPX", "SPY"] as const) {
+      const mine = due.filter((r) => (r.instrument ?? "SPX") === inst);
+      if (!mine.length) continue;
+      const first = Math.min(...mine.map((r) => r.asOf));
+      const qk = inst === "SPX" ? "spxQuote" : "spyQuote";
+      const ck = inst === "SPX" ? "spxChain" : "spyChain";
+      const quotes = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = ? AND received_at >= ? ORDER BY received_at`, today, qk, first - 60_000).toArray();
       const path = [];
       for (const r of quotes) {
         const q = JSON.parse(await gunzip(r.body)) as IndexQuote;
         path.push({ t: q.quoteTime, p: q.last });
       }
-      const chainRows = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = 'spxChain' AND received_at >= ? ORDER BY received_at`, today, first - 60_000).toArray();
+      const chainRows = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = ? AND received_at >= ? ORDER BY received_at`, today, ck, first - 60_000).toArray();
       const chains = [];
       for (const r of chainRows) chains.push({ receivedAt: r.received_at, chain: JSON.parse(await gunzip(r.body)) as ChainSnapshot });
-      for (const r of due) {
-        const g = gradeDecision({ record: r, path, chains, now, costs });
+      let lastKey = "";
+      let lastAt = 0;
+      for (const r of mine) {
+        // episode dedup: one grade per (family, direction, primary id) unless ≥ 5 minutes apart
+        const key = `${r.primary?.family}:${r.primary?.direction}:${r.primary?.id}`;
+        if (key === lastKey && r.asOf - lastAt < 5 * 60_000) {
+          this.sql.exec(`INSERT OR IGNORE INTO grades (decision_id, date, graded_at, family, hit, ret, body) VALUES (?,?,?,?,?,?,?)`, r.id, today, now, r.primary?.family ?? "", null, null, JSON.stringify({ skipped: "duplicate-episode", of: lastKey }));
+          continue;
+        }
+        const g = gradeDecision({ record: r, path, chains, now, costs, slippagePts: 0.05, latencyMs: 2000 });
         if (!g) continue;
+        lastKey = key;
+        lastAt = r.asOf;
         this.sql.exec(`INSERT OR REPLACE INTO grades (decision_id, date, graded_at, family, hit, ret, body) VALUES (?,?,?,?,?,?,?)`, g.decisionId, today, g.gradedAt, g.family, g.directionHit ? 1 : 0, g.wouldHaveRetPct, JSON.stringify(g));
-        this.recordChange({ at: now, kind: "position", text: `Graded ${g.family} ${g.direction} from ${fmtEtTime(g.decidedAt)}: underlying ${(g.underlyingRetPct * 100).toFixed(2)}%, would-have ${g.wouldHaveRetPct === null ? "n/a" : (g.wouldHaveRetPct * 100).toFixed(0) + "%"}${g.invalidated ? " (invalidated)" : ""}.` });
+        this.recordChange({ at: now, kind: "position", text: `Graded ${inst} ${g.family} ${g.direction} from ${fmtEtTime(g.decidedAt)}: underlying ${(g.underlyingRetPct * 100).toFixed(2)}%, would-have ${g.wouldHaveRetPct === null ? "n/a" : (g.wouldHaveRetPct * 100).toFixed(0) + "%"}${g.invalidated ? " (invalidated)" : ""}.` });
       }
     }
     // 2) closing-window recommendations: provisional at the close (last SPX print), official once the next session's
@@ -777,58 +952,92 @@ export class MarketSession extends DurableObject<Env> {
         this.sql.exec(`INSERT OR REPLACE INTO closing_grades (decision_id, official, date, graded_at, body) VALUES (?,?,?,?,?)`, r.id, official ? 1 : 0, d, now, JSON.stringify(g));
         // learn from each session once: fold the official grade when available, otherwise the provisional one is folded
         // the next day only if no official arrives (handled by the official pass replacing it)
-        if (official || !this.sql.exec<{ c: number }>(`SELECT COUNT(*) AS c FROM closing_grades WHERE decision_id = ? AND official = 1`, r.id).toArray()[0]!.c) {
-          this.closingLearner = updateClosingLearner(this.closingLearner ?? initialClosingLearner(now), g, this.getSettings().closing);
-        }
       }
+      // one record per session, official preferred: rebuild the learner from the ledger
+      const all = this.sql.exec<{ body: string }>(`SELECT body FROM closing_grades ORDER BY graded_at`).toArray().map((x) => JSON.parse(x.body) as ClosingGrade);
+      this.closingLearner = learnerFromGrades(all, this.getSettings().closing, (ms) => etDate(ms), (ms) => etParts(ms).minuteOfDay);
       await this.ctx.storage.put("closingLearner", this.closingLearner);
       this.recordChange({ at: now, kind: "closing", text: `Graded ${recs.length} closing-window record(s) for ${d} against ${official ? "the official close" : "the last SPX print (provisional)"} ${settlement.toFixed(2)}.` });
     }
   }
 
-  /** The official prior-session close as reported by the current chain's prev_day_close (Cboe) — null if unknown. */
+  /**
+   * The official prior-session close: from the Schwab $SPX quote's closePrice (prevClose) on the next session, or the
+   * Cboe chain's prev_day_close. Null until the next session has started.
+   */
   private officialCloseFor(date: string): number | null {
+    const q = this.latest.spxQuote?.payload as IndexQuote | undefined;
+    if (q?.prevClose && prevTradingDay(etDate(q.quoteTime)) === date) return q.prevClose;
     const c = this.latest.spxChain?.payload as ChainSnapshot | undefined;
-    if (!c?.prevClose) return null;
-    const chainDate = etDate(c.stamp.observedAt);
-    return prevTradingDay(chainDate) === date ? c.prevClose : null;
+    if (c?.prevClose && prevTradingDay(etDate(c.stamp.observedAt)) === date) return c.prevClose;
+    return null;
   }
 
+  /** The last SPX print at or before the close (the 15:59:59 print), not the first post-close print. */
   private async lastSpxAtOrAfter(date: string, t: number): Promise<number | null> {
-    const r = this.sql.exec<{ body: ArrayBuffer }>(`SELECT body FROM snapshots WHERE date = ? AND kind = 'spxQuote' AND observed_at >= ? ORDER BY observed_at ASC LIMIT 1`, date, t).toArray()[0] ?? this.sql.exec<{ body: ArrayBuffer }>(`SELECT body FROM snapshots WHERE date = ? AND kind = 'spxQuote' ORDER BY observed_at DESC LIMIT 1`, date).toArray()[0];
+    const r = this.sql.exec<{ body: ArrayBuffer }>(`SELECT body FROM snapshots WHERE date = ? AND kind = 'spxQuote' AND observed_at <= ? ORDER BY observed_at DESC LIMIT 1`, date, t).toArray()[0];
     if (!r) return null;
     const q = JSON.parse(await gunzip(r.body)) as IndexQuote;
     return q.last;
   }
 
   grades(): { grades: DecisionGrade[]; summary: ReturnType<typeof summarizeGrades>; closing: { grades: ClosingGrade[]; learner: ReturnType<typeof closingLearnerSummary> } } {
-    const grades = this.sql.exec<{ body: string }>(`SELECT body FROM grades ORDER BY graded_at DESC LIMIT 500`).toArray().map((r) => JSON.parse(r.body) as DecisionGrade);
+    const grades = this.sql.exec<{ body: string }>(`SELECT body FROM grades WHERE hit IS NOT NULL ORDER BY graded_at DESC LIMIT 500`).toArray().map((r) => JSON.parse(r.body) as DecisionGrade);
     const cg = this.sql.exec<{ body: string }>(`SELECT body FROM closing_grades ORDER BY graded_at DESC LIMIT 300`).toArray().map((r) => JSON.parse(r.body) as ClosingGrade);
     return { grades, summary: summarizeGrades(grades), closing: { grades: cg, learner: closingLearnerSummary(this.closingLearner, this.getSettings().closing) } };
   }
 
   // ---------- read API ----------
+  private packInstrument(inst: Instrument, now: number) {
+    const ev = this.lastEvalBy[inst];
+    const ctx = ev?.ctx;
+    const rec = ev?.rec ?? null;
+    return {
+      instrument: inst,
+      mode: ctx?.mode ?? "NONE",
+      quote: ctx?.quote ?? null,
+      decision: rec,
+      decisionAgeMs: rec ? now - rec.asOf : null,
+      regime: ctx?.regime ?? null,
+      levels: ctx?.levels ?? [],
+      bars: ctx?.bars ?? null,
+      chainFeatures: ctx?.chain ?? null,
+      // compact GEX summary only (no per-strike rows): the Gamma view fetches /api/gex for the detail
+      gex: ctx?.gex ? { ...ctx.gex, byStrike: [], flip: { ...ctx.gex.flip, profile: [], profile0dte: [] } } : null,
+      closing: rec?.closing ?? null,
+      mtf: ctx?.mtf ?? null,
+      cross: ctx?.cross ?? null,
+      notes: ctx?.notes ?? [],
+      evaluatedAt: ev?.at ?? null,
+    };
+  }
+
   async state() {
     const now = Date.now();
     // after a restart/redeploy the in-memory evaluation is gone: rebuild it from the reloaded snapshots on demand
-    if (!this.lastEval && Object.keys(this.latest).length && !this.running) {
+    if (!this.lastEvalBy.SPX && Object.keys(this.latest).length && !this.running) {
       try {
         await this.evaluate(now);
       } catch (e) {
         this.recordChange({ at: now, kind: "data", text: `On-demand evaluation failed: ${(e as Error).message}` });
       }
     }
-    const ev = this.lastEval;
     const frame = this.currentFrame(now);
-    const spxChain = frame.spxChain;
-    const ctx = ev?.ctx;
-    const rec = ev?.rec ?? null;
     const positions = this.openPositions();
-    const marks = positions.map((p) => markPosition(p, spxChain ?? null, frame.spx?.last ?? null, now));
+    const marks = positions.map((p) => markPosition(p, (p.root === "SPY" ? frame.spyChain : frame.spxChain) ?? null, (p.root === "SPY" ? frame.spy?.last : frame.spx?.last) ?? null, now));
+    const spx = this.packInstrument("SPX", now);
+    const spy = this.packInstrument("SPY", now);
+    const indices: Record<string, { last: number | null; ret15: number | null }> = {};
+    for (const [k, v] of this.indexBars) {
+      const done = v.filter((b) => b.t + 60_000 <= now);
+      const last = done[done.length - 1]?.c ?? null;
+      const prev = done.length > 15 ? done[done.length - 16]!.c : null;
+      indices[k] = { last, ret15: last !== null && prev ? last / prev - 1 : null };
+    }
     return {
       serverTime: now,
       clock: sessionClock(now),
-      mode: ctx?.mode ?? "NONE",
+      mode: spx.mode,
       feeds: this.feeds,
       schwab: this.schwabStatus(),
       lastTick: this.ticks[this.ticks.length - 1] ?? null,
@@ -837,23 +1046,32 @@ export class MarketSession extends DurableObject<Env> {
       spy: frame.spy ?? null,
       tick: frame.tick ?? null,
       vix: frame.vix ?? null,
-      tickFeatures: ctx?.tick ?? tickFeatures(frame.tickBars?.bars, frame.tick, now),
+      tickFeatures: spx.decision ? this.lastEvalBy.SPX!.ctx.tick : tickFeatures(frame.tickBars?.bars, frame.tick, now),
       grades: this.gradesSummaryCached(now),
-      decision: rec,
-      decisionAgeMs: rec ? now - rec.asOf : null,
-      regime: ctx?.regime ?? null,
-      levels: ctx?.levels ?? [],
-      bars: ctx?.spxBars ?? null,
-      chainFeatures: ctx?.spxChain ?? null,
-      gex: ctx?.gex ? { ...ctx.gex, byStrike: ctx.gex.byStrike.filter((r) => Math.abs(r.strike / ctx.gex!.spot - 1) <= 0.05) } : null,
-      closing: rec?.closing ?? null,
+      indices,
+      // SPX fields at the top level for compatibility; per-instrument packs below
+      decision: spx.decision,
+      decisionAgeMs: spx.decisionAgeMs,
+      regime: spx.regime,
+      levels: spx.levels,
+      bars: spx.bars,
+      chainFeatures: spx.chainFeatures,
+      gex: spx.gex,
+      closing: spx.closing,
+      instruments: { SPX: spx, SPY: spy },
       positions: positions.map((p) => ({ position: p, mark: marks.find((m) => m.id === p.id) ?? null })),
       realizedToday: this.realizedToday(etDate(now)),
       changes: this.changes.slice(-60),
       settings: this.getSettings(),
-      notes: ctx?.notes ?? [],
-      evaluatedAt: ev?.at ?? null,
+      notes: spx.notes,
+      evaluatedAt: spx.evaluatedAt,
     };
+  }
+
+  gexDetail(inst: Instrument) {
+    const ctx = this.lastEvalBy[inst]?.ctx;
+    if (!ctx?.gex) return null;
+    return { ...ctx.gex, byStrike: ctx.gex.byStrike.filter((r) => Math.abs(r.strike / ctx.gex!.spot - 1) <= 0.06) };
   }
 
   lean(): { stats: ReturnType<typeof leanStats>; weights: EnsembleWeights; pending: number; recent: ScoredPrediction[]; config: typeof DEFAULT_ENSEMBLE_CONFIG } {
@@ -912,15 +1130,15 @@ export class MarketSession extends DurableObject<Env> {
   }
 
   /** Reconstruct the as-of frame and decision at `at` from stored snapshots (no hindsight). */
-  async replayAt(date: string, at: number): Promise<{ decision: DecisionRecord; ctx: Pick<EngineContext, "regime" | "levels" | "spxBars" | "spxChain" | "mode" | "staleness"> & { gex: EngineContext["gex"] }; frameSummary: { spx: number | null; spotTime: number | null; chainObservedAt: number | null } }> {
+  async replayAt(date: string, at: number, instrument: Instrument = "SPX"): Promise<{ decision: DecisionRecord; ctx: { regime: EngineContext["regime"]; levels: EngineContext["levels"]; spxBars: EngineContext["bars"]; spxChain: EngineContext["chain"]; mode: EngineContext["mode"]; staleness: EngineContext["staleness"]; gex: EngineContext["gex"] }; frameSummary: { spx: number | null; spotTime: number | null; chainObservedAt: number | null } }> {
     const snaps = await this.loadSnapshots(date, at);
     const frame = frameAt(snaps, at, { events: this.getSettings().events });
-    const ctx = buildContext(frame, this.getSettings().engine, []);
+    const ctx = buildContext(frame, this.getSettings().engine, [], instrument);
     const rec = decide({ ctx, positions: [], previous: null, realizedToday: 0 });
     return {
       decision: rec,
-      ctx: { regime: ctx.regime, levels: ctx.levels, spxBars: ctx.spxBars, spxChain: ctx.spxChain, mode: ctx.mode, staleness: ctx.staleness, gex: ctx.gex ? { ...ctx.gex, byStrike: ctx.gex.byStrike.filter((r) => Math.abs(r.strike / ctx.gex!.spot - 1) <= 0.05) } : null },
-      frameSummary: { spx: frame.spx?.last ?? null, spotTime: frame.spx?.quoteTime ?? null, chainObservedAt: frame.spxChain?.stamp.observedAt ?? null },
+      ctx: { regime: ctx.regime, levels: ctx.levels, spxBars: ctx.bars, spxChain: ctx.chain, mode: ctx.mode, staleness: ctx.staleness, gex: ctx.gex ? { ...ctx.gex, byStrike: ctx.gex.byStrike.filter((r) => Math.abs(r.strike / ctx.gex!.spot - 1) <= 0.05) } : null },
+      frameSummary: { spx: ctx.quote?.last ?? null, spotTime: ctx.quote?.quoteTime ?? null, chainObservedAt: ctx.chainSnapshot?.stamp.observedAt ?? null },
     };
   }
 

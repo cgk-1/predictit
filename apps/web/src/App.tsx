@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ServerProvider, useServer, useServerNow } from "./api/context";
+import type { ServerConnection } from "./api/useServerState";
 import { setUnauthorizedHandler } from "./api/client";
 import { Nav, type NavItem } from "./components/Nav";
 import { StatusBar, isStale } from "./components/StatusBar";
@@ -67,9 +68,56 @@ function Banners() {
   );
 }
 
+/** Opt-in alerting on action changes: tab title prefix always; browser Notification and a short beep when enabled. */
+function useAlerts(conn: ServerConnection) {
+  const s = conn.state;
+  const action = s?.decision?.summary?.action ?? null;
+  const inst = s?.decision?.summary?.instrument ?? "SPX";
+  const prev = useRef<string | null>(null);
+  useEffect(() => {
+    if (!action) return;
+    const key = `${inst}:${action}`;
+    const base = document.title.replace(/^\[[^\]]+\] /, "");
+    document.title = action === "BUY CALL" || action === "BUY PUT" || action === "MANAGE" ? `[${action}] ${base}` : base;
+    if (prev.current !== null && prev.current !== key) {
+      let notify = false;
+      let beep = false;
+      try {
+        notify = localStorage.getItem("pi_alert_notify") === "1";
+        beep = localStorage.getItem("pi_alert_beep") === "1";
+      } catch {
+        /* ignore */
+      }
+      if (notify && typeof Notification !== "undefined" && Notification.permission === "granted") {
+        try {
+          new Notification(`predictit · ${inst}: ${action}`, { body: s?.decision?.summary?.actionText ?? "", tag: "predictit-action" });
+        } catch {
+          /* ignore */
+        }
+      }
+      if (beep && typeof AudioContext !== "undefined") {
+        try {
+          const ac = new AudioContext();
+          const o = ac.createOscillator();
+          const g = ac.createGain();
+          o.frequency.value = action === "BUY CALL" ? 880 : action === "BUY PUT" ? 440 : 660;
+          g.gain.value = 0.05;
+          o.connect(g).connect(ac.destination);
+          o.start();
+          o.stop(ac.currentTime + 0.18);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    prev.current = key;
+  }, [action, inst, s?.decision?.summary?.actionText]);
+}
+
 function Shell() {
   const path = useRoute();
   const conn = useServer();
+  useAlerts(conn);
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useTheme();
   const view = VIEWS.find((v) => v.path === path) ?? VIEWS[0]!;

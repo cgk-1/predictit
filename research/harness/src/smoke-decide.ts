@@ -10,7 +10,7 @@ const t0 = performance.now();
 const ctx = buildContext(frame);
 const rec = decide({ ctx, positions: [], previous: null, realizedToday: 0 });
 console.log(`decide in ${(performance.now() - t0).toFixed(0)}ms`);
-console.log("asOf", fmtEt(asOf), "phase", ctx.clock.phase, "mode", ctx.mode, "spot", frame.spx?.last, "spot age s", ctx.staleness.spxMs! / 1000);
+console.log("asOf", fmtEt(asOf), "phase", ctx.clock.phase, "mode", ctx.mode, "spot", frame.spx?.last, "spot age s", (ctx.staleness.quoteMs ?? NaN) / 1000);
 console.log("regime", { trend: ctx.regime.trend, structure: ctx.regime.structure, vol: ctx.regime.volatility, liq: ctx.regime.liquidity, gamma: ctx.regime.gamma, conf: ctx.regime.dataConfidence });
 console.log("evidence:", ctx.regime.evidence);
 console.log("STATE", rec.state, "| pass:", rec.passReasons, "| whyWait:", rec.whyWait);
