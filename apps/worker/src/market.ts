@@ -443,7 +443,8 @@ export class MarketSession extends DurableObject<Env> {
       // minute history backfill every 5 min (and on first tick) to seed bars
       if (now - this.lastHistoryFetch >= 5 * 60_000) {
         for (const sym of ["$SPX", "SPY"] as const) {
-          const h = await schwabApi.priceHistory(sym, { periodType: "day", period: 10, frequencyType: "minute", frequency: 1, needExtendedHoursData: false }, o);
+          // explicit start/end so the current session's minutes are included (a bare `period` returns completed days only)
+          const h = await schwabApi.priceHistory(sym, { periodType: "day", frequencyType: "minute", frequency: 1, startDate: now - 10 * 86400_000, endDate: now, needExtendedHoursData: false }, o);
           const bars = parseSchwabHistory(h.raw, h.receivedAt);
           const key = sym === "$SPX" ? "SPX" : "SPY";
           this.mergeBars(key, bars.bars);
