@@ -22,7 +22,7 @@ export interface SourceStamp {
   vendorRef?: string;
 }
 
-export type Underlying = "SPX" | "SPY" | "ES";
+export type Underlying = "SPX" | "SPY" | "ES" | "TICK" | "VIX";
 export type Right = "C" | "P";
 export type OptionRoot = "SPX" | "SPXW" | "SPXO" | "SPY" | "XSP";
 export type SettlementStyle = "AM" | "PM";
@@ -110,8 +110,13 @@ export interface MarketFrame {
   spx?: IndexQuote;
   spy?: IndexQuote;
   es?: IndexQuote;
+  /** NYSE TICK (Schwab $TICK): breadth/participation proxy; absent on delayed feeds */
+  tick?: IndexQuote;
+  vix?: IndexQuote;
   spxBars?: BarSeries;
   spyBars?: BarSeries;
+  /** 1-minute TICK bars built from quotes (h/l = max/min TICK in the minute) */
+  tickBars?: BarSeries;
   spxChain?: ChainSnapshot;
   spyChain?: ChainSnapshot;
   /** Prior-day reference levels (observed before today's open). */

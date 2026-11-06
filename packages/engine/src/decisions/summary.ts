@@ -19,7 +19,7 @@ export interface CleanSummary {
   agreement: number;
   action: "BUY CALL" | "BUY PUT" | "WAIT" | "PASS" | "MANAGE";
   actionText: string;
-  contract: { osi: string; label: string; bid: number; ask: number; riskUsd: number; breakeven: number; entryCondition: string } | null;
+  contract: { instrument: "SPX" | "SPY"; osi: string; label: string; bid: number; ask: number; riskUsd: number; breakeven: number; entryCondition: string } | null;
   expectedMove: { toCloseSigmaPts: number | null; horizonMinutes: number | null; toHorizonSigmaPts: number | null; straddleAbsMoveToClose: number | null; source: string };
   /** overnight gap state with the reflection-principle null for a fill (2·(1−Φ(gap/σ_to_close))) */
   gap: { pts: number | null; filled: boolean | null; fillLevel: number | null; nullFillProb: number | null };
@@ -50,14 +50,14 @@ export function buildSummary(ctx: EngineContext, rec: DecisionRecord, lean: Lean
     action = rec.state === "CALL SETUP" ? "BUY CALL" : "BUY PUT";
     if (rec.closing && ctx.clock.inClosingWindow && rec.closing.recommendation.contract) {
       const c = rec.closing.recommendation.contract;
-      contract = { osi: c.osi, label: `${c.osi.trim()} (${rec.closing.recommendation.mode})`, bid: c.bid, ask: c.ask, riskUsd: c.ask * 100, breakeven: c.breakevenSettle, entryCondition: rec.closing.recommendation.entryCondition };
+      contract = { instrument: "SPX", osi: c.osi, label: `${c.osi.trim()} (${rec.closing.recommendation.mode})`, bid: c.bid, ask: c.ask, riskUsd: c.ask * 100, breakeven: c.breakevenSettle, entryCondition: rec.closing.recommendation.entryCondition };
       actionText = `${action} — ${rec.closing.recommendation.mode === "resale" ? "resale before the close" : "hold through settlement"}.`;
       whenToSell.push(...rec.closing.recommendation.exitPlan);
       whenToSell.push(`Invalidation: ${rec.closing.recommendation.invalidation}`);
     } else {
       const c = rec.contracts.find((x) => x.eligible) ?? rec.contracts[0];
       if (c && rec.primary) {
-        contract = { osi: c.osi, label: `${c.root} ${c.expiry} ${c.strike}${c.right} (Δ ${c.delta?.toFixed(2) ?? "n/a"})`, bid: c.bid, ask: c.ask, riskUsd: c.riskUsd, breakeven: c.breakevenAtExpiry, entryCondition: rec.primary.entryZone ? `Enter while SPX is in ${rec.primary.entryZone.low.toFixed(1)}–${rec.primary.entryZone.high.toFixed(1)}; ${rec.primary.triggerCondition}` : rec.primary.triggerCondition };
+        contract = { instrument: c.instrument, osi: c.osi, label: `${c.root} ${c.expiry} ${c.strike}${c.right} (Δ ${c.delta?.toFixed(2) ?? "n/a"})`, bid: c.bid, ask: c.ask, riskUsd: c.riskUsd, breakeven: c.breakevenAtExpiry, entryCondition: rec.primary.entryZone ? `Enter while SPX is in ${rec.primary.entryZone.low.toFixed(1)}–${rec.primary.entryZone.high.toFixed(1)}; ${rec.primary.triggerCondition}` : rec.primary.triggerCondition };
         actionText = `${action} — ${rec.primary.name} (${rec.primary.lifecycle}); risk $${c.riskUsd.toFixed(0)}/contract at the ask.`;
         whenToSell.push(...rec.primary.exitRules);
         whenToSell.push(`Invalidation: ${rec.primary.invalidationText}`);

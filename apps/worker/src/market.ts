@@ -46,6 +46,17 @@ import {
   initialWeights,
   reconcileWeights,
   makePredictions,
+  gradeDecision,
+  summarizeGrades,
+  gradeClosingDecision,
+  initialClosingLearner,
+  updateClosingLearner,
+  applyClosingLearning,
+  closingLearnerSummary,
+  tickFeatures,
+  type DecisionGrade,
+  type ClosingGrade,
+  type ClosingLearnerState,
   scorePredictions,
   leanStats,
   DEFAULT_ENSEMBLE_CONFIG,
@@ -72,6 +83,7 @@ import {
   type CboeIntradayRaw,
 } from "@predictit/adapters";
 import type { Env } from "./env";
+import { fmtEtTime, prevTradingDay } from "@predictit/engine";
 
 export interface AppSettings {
   engine: EngineSettings;
@@ -108,7 +120,7 @@ interface Tick {
   mode: string;
 }
 
-const SNAP_KINDS = ["spxChain", "spyChain", "spxBars", "spyBars", "spxQuote", "spyQuote", "esQuote"] as const;
+const SNAP_KINDS = ["spxChain", "spyChain", "spxBars", "spyBars", "spxQuote", "spyQuote", "esQuote", "tickQuote", "vixQuote", "tickBars"] as const;
 
 async function gzip(text: string): Promise<ArrayBuffer> {
   const cs = new CompressionStream("gzip");
@@ -158,6 +170,8 @@ export class MarketSession extends DurableObject<Env> {
   private schwabLastRefreshAt: number | null = null;
   private running = false;
   private weights: EnsembleWeights | null = null;
+  private closingLearner: ClosingLearnerState | null = null;
+  private lastGradeSweep = 0;
   private pending: PendingPrediction[] = [];
   private lastPredictionMinute = 0;
   private storedCreds: { clientId: string; clientSecret: string } | null = null;
@@ -197,11 +211,14 @@ export class MarketSession extends DurableObject<Env> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS archive_log (date TEXT PRIMARY KEY, archived_at INTEGER NOT NULL, rows INTEGER NOT NULL, bytes INTEGER NOT NULL)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS predictions (id TEXT PRIMARY KEY, at INTEGER NOT NULL, date TEXT NOT NULL, horizon_min INTEGER NOT NULL, score REAL NOT NULL, outcome TEXT, hit INTEGER, ret REAL, body TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS grades (decision_id TEXT PRIMARY KEY, date TEXT NOT NULL, graded_at INTEGER NOT NULL, family TEXT NOT NULL, hit INTEGER, ret REAL, body TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS closing_grades (decision_id TEXT NOT NULL, official INTEGER NOT NULL, date TEXT NOT NULL, graded_at INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY (decision_id, official))`);
   }
 
   private async loadState() {
     this.settings = (await this.ctx.storage.get<AppSettings>("settings")) ?? null;
     this.tokens = (await this.ctx.storage.get<SchwabTokens>("schwabTokens")) ?? null;
+    this.closingLearner = (await this.ctx.storage.get<ClosingLearnerState>("closingLearner")) ?? null;
     const storedWeights = (await this.ctx.storage.get<EnsembleWeights>("ensembleWeights")) ?? null;
     this.weights = storedWeights ? reconcileWeights(storedWeights) : null;
     this.pending = (await this.ctx.storage.get<PendingPrediction[]>("pendingPredictions")) ?? [];
@@ -382,9 +399,18 @@ export class MarketSession extends DurableObject<Env> {
     try {
       const o = { accessToken: token };
       // quotes every tick
-      const q = await schwabApi.quotes(["$SPX", "SPY"], o);
+      const q = await schwabApi.quotes(["$SPX", "SPY", "$TICK", "$VIX"], o);
       const spx = q.raw["$SPX"] ? parseSchwabQuote("$SPX", q.raw["$SPX"], q.receivedAt) : null;
       const spy = q.raw["SPY"] ? parseSchwabQuote("SPY", q.raw["SPY"], q.receivedAt) : null;
+      const tick = q.raw["$TICK"] ? { ...parseSchwabQuote("$TICK", q.raw["$TICK"], q.receivedAt), symbol: "TICK" as const } : null;
+      const vix = q.raw["$VIX"] ? { ...parseSchwabQuote("$VIX", q.raw["$VIX"], q.receivedAt), symbol: "VIX" as const } : null;
+      if (tick && Number.isFinite(tick.last)) {
+        await this.storeSnapshot("tickQuote", tick, tick.quoteTime, q.receivedAt, "schwab", "LIVE", true);
+        this.appendLiveBar("TICK", tick);
+        const tb = this.liveBars.get("TICK");
+        if (tb?.length) await this.storeSnapshot("tickBars", { symbol: "TICK", bars: tb, stamp: { source: "schwab", mode: "LIVE", observedAt: now, receivedAt: now } }, now, now, "schwab", "LIVE", true);
+      }
+      if (vix && Number.isFinite(vix.last)) await this.storeSnapshot("vixQuote", vix, vix.quoteTime, q.receivedAt, "schwab", "LIVE", true);
       if (spx) {
         await this.storeSnapshot("spxQuote", spx, spx.quoteTime, q.receivedAt, "schwab", "LIVE", true);
         this.appendLiveBar("SPX", spx);
@@ -442,7 +468,7 @@ export class MarketSession extends DurableObject<Env> {
     }
   }
 
-  private appendLiveBar(symbol: "SPX" | "SPY", q: IndexQuote) {
+  private appendLiveBar(symbol: "SPX" | "SPY" | "TICK", q: IndexQuote) {
     const bars = this.liveBars.get(symbol) ?? [];
     const minute = Math.floor(q.quoteTime / 60_000) * 60_000;
     const last = bars[bars.length - 1];
@@ -533,6 +559,9 @@ export class MarketSession extends DurableObject<Env> {
     f.spx = g<IndexQuote>("spxQuote");
     f.spy = g<IndexQuote>("spyQuote");
     f.es = g<IndexQuote>("esQuote");
+    f.tick = g<IndexQuote>("tickQuote");
+    f.vix = g<IndexQuote>("vixQuote");
+    f.tickBars = g<BarSeries>("tickBars");
     // prior-day levels from bars of the previous session, if present
     const bars = f.spxBars?.bars ?? [];
     const today = etDate(now);
@@ -569,7 +598,17 @@ export class MarketSession extends DurableObject<Env> {
       this.weights = weights0;
       await this.ctx.storage.put("ensembleWeights", this.weights);
     }
-    const rec = decide({ ctx, positions, previous: this.lastDecision, realizedToday, weights: this.weights });
+    const learnedClosing = applyClosingLearning(this.getSettings().closing, this.closingLearner);
+    const rec = decide({ ctx, positions, previous: this.lastDecision, realizedToday, weights: this.weights, closingSettings: learnedClosing });
+    // continuous self-grading of past recommendations (every 60 s)
+    if (now - this.lastGradeSweep >= 60_000) {
+      this.lastGradeSweep = now;
+      try {
+        await this.gradeSweep(now, ctx.today);
+      } catch (e) {
+        this.recordChange({ at: now, kind: "data", text: `Grading sweep failed: ${(e as Error).message}` });
+      }
+    }
     // one prediction set per minute during the regular session
     const minute = Math.floor(now / 60_000);
     if (ctx.clock.isRegularSession && minute !== this.lastPredictionMinute && ctx.frame.spx && ctx.mode !== "NONE") {
@@ -596,6 +635,15 @@ export class MarketSession extends DurableObject<Env> {
   }
 
   private lastEval: { rec: DecisionRecord; ctx: EngineContext; at: number } | null = null;
+  private gradesCache: { at: number; value: ReturnType<typeof summarizeGrades> } | null = null;
+
+  private gradesSummaryCached(now: number) {
+    if (this.gradesCache && now - this.gradesCache.at < 30_000) return this.gradesCache.value;
+    const grades = this.sql.exec<{ body: string }>(`SELECT body FROM grades ORDER BY graded_at DESC LIMIT 500`).toArray().map((r) => JSON.parse(r.body) as DecisionGrade);
+    const value = summarizeGrades(grades);
+    this.gradesCache = { at: now, value };
+    return value;
+  }
 
   private recordChange(e: ChangeEvent) {
     this.changes.push(e);
@@ -673,6 +721,88 @@ export class MarketSession extends DurableObject<Env> {
     return closed;
   }
 
+  // ---------- self-grading ----------
+  private async gradeSweep(now: number, today: string): Promise<void> {
+    const costs = { commissionPerContract: this.getSettings().engine.commissionPerContract, feesPerContract: this.getSettings().engine.feesPerContract };
+    // 1) intraday recommendations whose horizon has passed and that are not graded yet
+    const due = this.sql
+      .exec<{ id: string; body: string }>(`SELECT id, body FROM decisions WHERE date = ? AND state IN ('CALL SETUP','PUT SETUP') AND id NOT IN (SELECT decision_id FROM grades) ORDER BY as_of`, today)
+      .toArray()
+      .map((r) => JSON.parse(r.body) as DecisionRecord)
+      .filter((r) => r.primary && now >= r.asOf + r.primary.horizonMinutes * 60_000);
+    if (due.length) {
+      const first = Math.min(...due.map((r) => r.asOf));
+      const quotes = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = 'spxQuote' AND received_at >= ? ORDER BY received_at`, today, first - 60_000).toArray();
+      const path = [];
+      for (const r of quotes) {
+        const q = JSON.parse(await gunzip(r.body)) as IndexQuote;
+        path.push({ t: q.quoteTime, p: q.last });
+      }
+      const chainRows = this.sql.exec<{ received_at: number; body: ArrayBuffer }>(`SELECT received_at, body FROM snapshots WHERE date = ? AND kind = 'spxChain' AND received_at >= ? ORDER BY received_at`, today, first - 60_000).toArray();
+      const chains = [];
+      for (const r of chainRows) chains.push({ receivedAt: r.received_at, chain: JSON.parse(await gunzip(r.body)) as ChainSnapshot });
+      for (const r of due) {
+        const g = gradeDecision({ record: r, path, chains, now, costs });
+        if (!g) continue;
+        this.sql.exec(`INSERT OR REPLACE INTO grades (decision_id, date, graded_at, family, hit, ret, body) VALUES (?,?,?,?,?,?,?)`, g.decisionId, today, g.gradedAt, g.family, g.directionHit ? 1 : 0, g.wouldHaveRetPct, JSON.stringify(g));
+        this.recordChange({ at: now, kind: "position", text: `Graded ${g.family} ${g.direction} from ${fmtEtTime(g.decidedAt)}: underlying ${(g.underlyingRetPct * 100).toFixed(2)}%, would-have ${g.wouldHaveRetPct === null ? "n/a" : (g.wouldHaveRetPct * 100).toFixed(0) + "%"}${g.invalidated ? " (invalidated)" : ""}.` });
+      }
+    }
+    // 2) closing-window recommendations: provisional at the close (last SPX print), official once the next session's
+    //    chain reports prev_day_close (= official S&P 500 close used for SPXW PM settlement)
+    const clock = sessionClock(now);
+    const closeMs = clock.session.closeMs;
+    const dates = [today, ...(clock.session.isTradingDay ? [prevTradingDay(today)] : [])];
+    for (const d of dates) {
+      const isToday = d === today;
+      if (isToday && now < closeMs + 30_000) continue;
+      const settleOfficial = !isToday ? this.officialCloseFor(d) : null;
+      const official = settleOfficial !== null;
+      if (!isToday && !official) continue;
+      const recs = this.sql
+        .exec<{ id: string; body: string }>(`SELECT id, body FROM decisions WHERE date = ? AND id NOT IN (SELECT decision_id FROM closing_grades WHERE official = ?) ORDER BY as_of`, d, official ? 1 : 0)
+        .toArray()
+        .map((r) => JSON.parse(r.body) as DecisionRecord)
+        .filter((r) => r.closing && r.closing.subWindow !== "pre" && r.closing.subWindow !== "closed");
+      if (!recs.length) continue;
+      const lastTick = await this.lastSpxAtOrAfter(d, closeMs - (isToday ? 0 : 0));
+      const settlement = official ? settleOfficial! : lastTick;
+      if (settlement === null) continue;
+      for (const r of recs) {
+        const g = gradeClosingDecision(r.id, r.closing!, settlement, official, lastTick, costs);
+        this.sql.exec(`INSERT OR REPLACE INTO closing_grades (decision_id, official, date, graded_at, body) VALUES (?,?,?,?,?)`, r.id, official ? 1 : 0, d, now, JSON.stringify(g));
+        // learn from each session once: fold the official grade when available, otherwise the provisional one is folded
+        // the next day only if no official arrives (handled by the official pass replacing it)
+        if (official || !this.sql.exec<{ c: number }>(`SELECT COUNT(*) AS c FROM closing_grades WHERE decision_id = ? AND official = 1`, r.id).toArray()[0]!.c) {
+          this.closingLearner = updateClosingLearner(this.closingLearner ?? initialClosingLearner(now), g, this.getSettings().closing);
+        }
+      }
+      await this.ctx.storage.put("closingLearner", this.closingLearner);
+      this.recordChange({ at: now, kind: "closing", text: `Graded ${recs.length} closing-window record(s) for ${d} against ${official ? "the official close" : "the last SPX print (provisional)"} ${settlement.toFixed(2)}.` });
+    }
+  }
+
+  /** The official prior-session close as reported by the current chain's prev_day_close (Cboe) — null if unknown. */
+  private officialCloseFor(date: string): number | null {
+    const c = this.latest.spxChain?.payload as ChainSnapshot | undefined;
+    if (!c?.prevClose) return null;
+    const chainDate = etDate(c.stamp.observedAt);
+    return prevTradingDay(chainDate) === date ? c.prevClose : null;
+  }
+
+  private async lastSpxAtOrAfter(date: string, t: number): Promise<number | null> {
+    const r = this.sql.exec<{ body: ArrayBuffer }>(`SELECT body FROM snapshots WHERE date = ? AND kind = 'spxQuote' AND observed_at >= ? ORDER BY observed_at ASC LIMIT 1`, date, t).toArray()[0] ?? this.sql.exec<{ body: ArrayBuffer }>(`SELECT body FROM snapshots WHERE date = ? AND kind = 'spxQuote' ORDER BY observed_at DESC LIMIT 1`, date).toArray()[0];
+    if (!r) return null;
+    const q = JSON.parse(await gunzip(r.body)) as IndexQuote;
+    return q.last;
+  }
+
+  grades(): { grades: DecisionGrade[]; summary: ReturnType<typeof summarizeGrades>; closing: { grades: ClosingGrade[]; learner: ReturnType<typeof closingLearnerSummary> } } {
+    const grades = this.sql.exec<{ body: string }>(`SELECT body FROM grades ORDER BY graded_at DESC LIMIT 500`).toArray().map((r) => JSON.parse(r.body) as DecisionGrade);
+    const cg = this.sql.exec<{ body: string }>(`SELECT body FROM closing_grades ORDER BY graded_at DESC LIMIT 300`).toArray().map((r) => JSON.parse(r.body) as ClosingGrade);
+    return { grades, summary: summarizeGrades(grades), closing: { grades: cg, learner: closingLearnerSummary(this.closingLearner, this.getSettings().closing) } };
+  }
+
   // ---------- read API ----------
   async state() {
     const now = Date.now();
@@ -701,6 +831,10 @@ export class MarketSession extends DurableObject<Env> {
       tickStats: { n: this.ticks.length, avgMs: this.ticks.length ? Math.round(this.ticks.reduce((a, t) => a + t.durationMs, 0) / this.ticks.length) : null },
       spx: frame.spx ?? null,
       spy: frame.spy ?? null,
+      tick: frame.tick ?? null,
+      vix: frame.vix ?? null,
+      tickFeatures: ctx?.tick ?? tickFeatures(frame.tickBars?.bars, frame.tick, now),
+      grades: this.gradesSummaryCached(now),
       decision: rec,
       decisionAgeMs: rec ? now - rec.asOf : null,
       regime: ctx?.regime ?? null,

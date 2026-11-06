@@ -104,12 +104,18 @@ describe("closing window assessment", () => {
     const t = at(15, 51);
     // crossed above 7400 three minutes ago and held
     const pts = path([[t - 600_000, 7394], [t - 400_000, 7397], [t - 200_000, 7399], [t - 180_000, 7401.5], [t - 120_000, 7403], [t - 60_000, 7404], [t - 5_000, 7405]]);
-    const a = assessClosingWindow({ clock: sessionClock(t), spx: quote(7405, t), spy: null, es: null, path: pts, spyPath: [], esPath: [], chain: chain(7405, t, 2.5), mode: "LIVE", settings: { minEdgePts: -10 } });
+    const a = assessClosingWindow({ clock: sessionClock(t), spx: quote(7405, t), spy: null, es: null, path: pts, spyPath: [], esPath: [], chain: chain(7405, t, 2.5), mode: "LIVE", settings: { minEdgePts: -10, maxPremiumUsd: 2000 } });
     const row = a.ladder.find((r) => r.strike === 7400)!;
     expect(row.pattern).toBe("break-hold");
     expect(row.bias).toBe("call");
     expect(row.call?.feasibility.resale).toBe("ok");
     expect(row.call?.feasibility.hold).toBe("ok");
+    // the per-contract budget blocks contracts whose ask × 100 exceeds it
+    const tight = assessClosingWindow({ clock: sessionClock(t), spx: quote(7405, t), spy: null, es: null, path: pts, spyPath: [], esPath: [], chain: chain(7405, t, 2.5), mode: "LIVE", settings: { minEdgePts: -10, maxPremiumUsd: 100 } });
+    const itm = tight.ladder.find((r) => r.strike === 7400)!.call!;
+    expect(itm.ask * 100).toBeGreaterThan(100);
+    expect(itm.feasibility.hold).toBe("blocked");
+    expect(itm.feasibility.reasons.some((x) => /budget/.test(x))).toBe(true);
     expect(a.eligibleExpiry).toBe(DATE);
     expect(["CALL SETUP", "WAIT"]).toContain(a.recommendation.state);
     if (a.recommendation.state === "CALL SETUP") {

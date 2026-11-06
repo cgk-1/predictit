@@ -8,6 +8,7 @@ import type { ChainFeatures } from "../features/chain";
 import type { GexSummary } from "../gex/gex";
 import { gexRegimeLabel } from "../gex/gex";
 import type { SessionClock } from "../time/session";
+import type { TickFeatures } from "../features/tick";
 
 export type TrendLabel = "trend-up" | "trend-down" | "range" | "unknown";
 export type StructureLabel = "breakout-up" | "breakout-down" | "failed-breakout-up" | "failed-breakout-down" | "inside-range" | "unknown";
@@ -22,7 +23,7 @@ export interface RegimeAssessment {
   volatility: VolLabel;
   rvOverIv: number | null;
   liquidity: LiquidityLabel;
-  participation: "unknown" | "broad" | "narrow";
+  participation: "unknown" | "broad" | "narrow" | "divergent" | "exhaustion";
   gamma: "positive" | "negative" | "near-flip" | "unknown";
   eventRisk: { level: "none" | "low" | "medium" | "high"; next: ScheduledEvent | null; minutesUntil: number | null };
   dataConfidence: Confidence;
@@ -39,6 +40,7 @@ export interface RegimeInputs {
   events: ScheduledEvent[];
   staleness: { spxMs: number | null; chainMs: number | null; barsMs: number | null };
   mode: "LIVE" | "DELAYED" | "REPLAY" | "NONE";
+  tick?: TickFeatures;
 }
 
 export function assessRegime(i: RegimeInputs): RegimeAssessment {
@@ -85,13 +87,21 @@ export function assessRegime(i: RegimeInputs): RegimeAssessment {
     liquidity = lq.atmSpreadPct <= 0.02 ? "good" : lq.atmSpreadPct <= 0.06 ? "fair" : "poor";
     ev.push(`ATM spread ${(lq.atmSpreadPct * 100).toFixed(1)}% of mid (${lq.atmSpread?.toFixed(2)}), sizes ${lq.atmBidSize}×${lq.atmAskSize} → liquidity ${liquidity}.`);
   }
-  // participation: breadth not available from current feeds
+  // participation: NYSE TICK when live; otherwise unknown (SPY agreement is only a sanity check)
   let participation: RegimeAssessment["participation"] = "unknown";
   if (i.spyBars && i.spyBars.vwap !== null && i.spxBars?.ret15 !== null && i.spyBars.ret15 !== null && i.spxBars) {
     const agree = Math.sign(i.spyBars.ret15) === Math.sign(i.spxBars.ret15 ?? 0);
     ev.push(`SPY 15m return ${(i.spyBars.ret15 * 100).toFixed(2)}% ${agree ? "confirms" : "diverges from"} SPX.`);
   }
-  notes.push({ level: "info", message: "Breadth/sector participation is not available from the connected feeds; participation is labelled unknown." });
+  const tk = i.tick;
+  if (tk && tk.label !== "n/a") {
+    const r15 = b?.ret15 ?? 0;
+    if (tk.label === "exhaustion-high" || tk.label === "exhaustion-low") participation = "exhaustion";
+    else if ((tk.label === "broad-up" && r15 >= 0) || (tk.label === "broad-down" && r15 <= 0)) participation = "broad";
+    else if ((tk.label === "broad-up" && r15 < 0) || (tk.label === "broad-down" && r15 > 0) || (tk.label === "mixed" && Math.abs(r15) >= 0.002)) participation = Math.abs(r15) >= 0.002 && tk.label === "mixed" ? "narrow" : "divergent";
+    else participation = "narrow";
+    ev.push(`${tk.text} → participation ${participation}.`);
+  } else notes.push({ level: "info", message: "NYSE TICK (breadth) needs the Schwab live feed; participation is labelled unknown." });
   // gamma
   let gamma: RegimeAssessment["gamma"] = "unknown";
   if (i.gex) {

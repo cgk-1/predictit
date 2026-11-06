@@ -83,6 +83,9 @@ export const INDICATORS: IndicatorSpec[] = [
   { id: "pcVol", label: "0DTE put/call volume (contrarian)", family: "flow", hypothesis: "Heavy put volume is a contrarian positive.", evidence: "C", priorWeight: 0.4 },
   { id: "optVolTilt", label: "Recent call vs put volume tilt", family: "flow", hypothesis: "Call-heavy recent minutes lean up.", evidence: "C", priorWeight: 0.4 },
   { id: "spyConfirm", label: "SPY confirmation", family: "cross-market", hypothesis: "SPY agreeing with SPX strengthens the move.", evidence: "C", priorWeight: 0.8 },
+  { id: "tickTrend", label: "TICK 10-min average (participation)", family: "cross-market", hypothesis: "Persistently signed NYSE TICK marks broad participation that continues.", evidence: "C", priorWeight: 0.8 },
+  { id: "tickExtreme", label: "TICK extreme (contrarian)", family: "mean-reversion", hypothesis: "Readings beyond ±1000 mark short-term exhaustion.", evidence: "C", priorWeight: 0.6 },
+  { id: "tickDivergence", label: "TICK vs price divergence", family: "cross-market", hypothesis: "Price moving without breadth support reverts.", evidence: "C", priorWeight: 0.6 },
   { id: "dow", label: "Day-of-week prior", family: "calendar", hypothesis: "Monday has leaned positive 2023–2026 (daily, in-sample); literature finds day-of-week effects largely absent post-1990.", evidence: "D", priorWeight: 0.15 },
   { id: "tom", label: "Turn-of-month", family: "calendar", hypothesis: "Days −1..+3 around month-end carry higher average returns (daily-close evidence; intraday share unknown).", evidence: "B", priorWeight: 0.2 },
   { id: "prevDayRet", label: "Prior-day return (daily reversion)", family: "calendar", hypothesis: "After ±1% days the next day leans the other way (daily, in-sample).", evidence: "D", priorWeight: 0.4 },
@@ -183,9 +186,20 @@ export function indicatorVotes(ctx: EngineContext, cal: CalendarFeatures | null)
   } else push("optVolTilt", null, "no per-minute options volume");
   const s = ctx.spyBars;
   push("spyConfirm", s && s.ret15 !== null && b.ret15 !== null ? (Math.sign(s.ret15) === Math.sign(b.ret15) ? scaled(b.ret15, 2 * unitRet) : 0) : null, s ? `SPY 15m ${fmtPct(s.ret15 ?? null)}` : "no SPY");
+  // NYSE TICK (live feed only)
+  const tk = ctx.tick;
+  if (tk.label !== "n/a" && tk.avg10 !== null && tk.last !== null) {
+    push("tickTrend", clamp(tk.avg10 / 600, -1, 1), `10-min avg TICK ${tk.avg10.toFixed(0)}`);
+    push("tickExtreme", tk.last >= 1000 ? -0.6 : tk.last <= -1000 ? 0.6 : 0, `TICK ${tk.last}`);
+    const r15 = b.ret15 ?? 0;
+    const diverge = (r15 > 0.001 && tk.avg10 < -100) || (r15 < -0.001 && tk.avg10 > 100);
+    push("tickDivergence", diverge ? -Math.sign(r15) * 0.5 : 0, diverge ? `SPX 15m ${fmtPct(r15)} vs TICK avg ${tk.avg10.toFixed(0)} (divergent)` : "no divergence");
+  } else {
+    push("tickTrend", null, "TICK unavailable");
+    push("tickExtreme", null, "TICK unavailable");
+    push("tickDivergence", null, "TICK unavailable");
+  }
   // calendar
-  const dow = ctx.clock.now ? new Date(ctx.clock.now) : null;
-  void dow;
   const wd = cal?.dayOfWeek ?? null;
   push("dow", wd === null ? null : wd === 1 ? 0.3 : wd === 4 ? -0.1 : 0, cal ? cal.dayName : "n/a");
   const pr = cal?.prior?.ret ?? null;

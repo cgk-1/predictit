@@ -66,8 +66,9 @@ authentication server-side for assets, APIs and streams alike, and refuses to se
 
 The developer app you showed has only **Market Data Production** enabled, callback `https://127.0.0.1:8182`.
 
-What works with that: real-time `$SPX` and `SPY` quotes, SPX/SPXW/SPXO and SPY option chains with bid/ask/size/OI/
-volume/greeks, minute price history (seeds prior-day, gap and weekly features), market hours. Rate limit 120 requests
+What works with that: real-time `$SPX`, `SPY`, `$TICK` (NYSE TICK, breadth) and `$VIX` quotes, SPX/SPXW/SPXO and
+SPY option chains with bid/ask/size/OI/volume/greeks, minute price history (seeds prior-day, gap and weekly
+features), market hours. TICK and VIX exist only on the Schwab feed; on the Cboe delayed fallback they read n/a. Rate limit 120 requests
 per minute per app; the poller uses about 20.
 
 Connecting (no terminal needed):
@@ -95,7 +96,16 @@ pnpm dev:web      # Vite on :5173, proxies /api to :8787
 pnpm dev:worker   # wrangler dev on :8787 (serves apps/web/dist when built)
 ```
 
-## 7. Operating notes
+## 7. Budget and grading defaults
+
+- Per-contract premium budget defaults to **$200** (ask × 100) and applies to SPX and SPY ranking and to the
+  closing-window module; SPY contracts are ranked alongside SPX so cheaper equivalents surface when SPX premiums exceed
+  the budget. Change it in Settings → Budgets.
+- Self-grading runs every minute: intraday recommendations are graded at their horizon; closing-window records at the
+  close (provisional) and again when the official close is known; the ensemble scores its own predictions. Results are
+  on Performance and Lean; nothing is deleted or rewritten.
+
+## 8. Operating notes
 
 - Health: `GET /api/health` (feed status, last tick, latest snapshot times). The Today view shows feed health and the
   evaluation age; "stale" appears when the server has not evaluated for 30 s.

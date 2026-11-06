@@ -285,19 +285,22 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
     }
   }
 
-  // 6. Momentum + participation proxy (needs SPY)
+  // 6. Momentum + participation (NYSE TICK when live; SPY agreement as a weak proxy otherwise)
   if (STRATEGY_META["momentum-participation"]!.phases.includes(phase)) {
     const s = ctx.spyBars;
-    if (!s || s.ret15 === null || b.ret15 === null) wait("momentum-participation", "Needs SPY bars with volume (breadth unavailable).");
+    const tk = ctx.tick;
+    const tickLive = tk.label !== "n/a" && tk.avg10 !== null;
+    if (b.ret15 === null || (!tickLive && (!s || s.ret15 === null))) wait("momentum-participation", "Needs NYSE TICK (Schwab live) or SPY bars.");
     else if (Math.abs(b.ret15) < 0.002) wait("momentum-participation", `15m SPX move ${(b.ret15 * 100).toFixed(2)}% below 0.20% threshold.`);
-    else if (Math.sign(s.ret15) !== Math.sign(b.ret15)) wait("momentum-participation", "SPY does not confirm SPX direction.");
+    else if (tickLive && ((b.ret15 > 0 && tk.label !== "broad-up") || (b.ret15 < 0 && tk.label !== "broad-down"))) wait("momentum-participation", `TICK does not show broad participation (${tk.label}, 10-min avg ${tk.avg10!.toFixed(0)}).`);
+    else if (!tickLive && s && s.ret15 !== null && Math.sign(s.ret15) !== Math.sign(b.ret15)) wait("momentum-participation", "SPY does not confirm SPX direction (no TICK).");
     else {
       const dir = b.ret15 > 0 ? "call" : "put";
       out.candidates.push({
         ...base(ctx, "momentum-participation", dir, "15m"),
         lifecycle: "triggered",
-        evidence: [ev(ctx, "SPX 15m", `${(b.ret15 * 100).toFixed(2)}%`), ev(ctx, "SPY 15m", `${(s.ret15 * 100).toFixed(2)}%`)],
-        triggerCondition: "15m SPX move ≥0.20% with SPY same sign (participation proxy; breadth not available).",
+        evidence: tickLive ? [ev(ctx, "SPX 15m", `${(b.ret15 * 100).toFixed(2)}%`), ev(ctx, "NYSE TICK", tk.text)] : [ev(ctx, "SPX 15m", `${(b.ret15 * 100).toFixed(2)}%`), ev(ctx, "SPY 15m", `${((s?.ret15 ?? 0) * 100).toFixed(2)}%`)],
+        triggerCondition: tickLive ? "15m SPX move ≥0.20% with broad NYSE TICK participation in the same direction." : "15m SPX move ≥0.20% with SPY same sign (weak proxy; TICK unavailable).",
         entryZone: dir === "call" ? { low: last - atr, high: last + atr } : { low: last - atr, high: last + atr },
         invalidationLevel: dir === "call" ? last - 2 * atr : last + 2 * atr,
         invalidationText: "Give-back of 2× ATR from entry.",
@@ -305,8 +308,8 @@ export function evaluateStrategies(ctx: EngineContext): StrategyOutput {
         horizonMinutes: 25,
         exitRules: ["Time stop 25 min", "Trail by 1.5× ATR after +2× ATR"],
         preferredExpiry: "0DTE",
-        counterargument: "Short-horizon momentum in index futures mean-reverts at 15-30 minute horizons in many samples; without breadth this is a weak proxy.",
-        dataNotes: [{ level: "warn", message: "Breadth/sector participation unavailable; SPY sign agreement used as proxy." }],
+        counterargument: tickLive ? "Short-horizon momentum mean-reverts often; TICK extremes above +1000 / below −1000 can mark exhaustion rather than continuation." : "Short-horizon momentum in index futures mean-reverts at 15-30 minute horizons in many samples; without breadth this is a weak proxy.",
+        dataNotes: tickLive ? [] : [{ level: "warn", message: "NYSE TICK unavailable; SPY sign agreement used as proxy." }],
         expiresAt: ctx.asOf + minutes(5),
         priority: 3,
       });

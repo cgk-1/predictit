@@ -41,6 +41,10 @@ export interface ClosingSettings {
   /** minimum modelled edge (points) over the ask required to recommend */
   minEdgePts: number;
   costs: CostModel;
+  /** maximum premium per contract in USD (ask × 100); contracts above it are never recommended */
+  maxPremiumUsd: number;
+  /** learned per-pattern trust multipliers (bounded 0.5–1.5) applied to the required edge: edge ≥ minEdgePts / trust */
+  patternTrust?: Record<string, number>;
 }
 
 export const DEFAULT_CLOSING_SETTINGS: ClosingSettings = {
@@ -58,6 +62,7 @@ export const DEFAULT_CLOSING_SETTINGS: ClosingSettings = {
   driftPersistence: 0.5,
   minEdgePts: 0.25,
   costs: { commissionPerContract: 0.65, feesPerContract: 0.7 },
+  maxPremiumUsd: 200,
 };
 
 export interface QuoteEval {
@@ -263,6 +268,7 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
           hold = "blocked";
           reasons.push("no new entries in the final minute (entry delay, broker cut-offs, no exit)");
         }
+        if (o.ask * 100 > s.maxPremiumUsd) reasons.push(`premium $${(o.ask * 100).toFixed(0)} > budget $${s.maxPremiumUsd}`);
         if (spread > s.maxSpreadPts && spread / Math.max(0.05, (o.ask + o.bid) / 2) > s.maxSpreadPct) reasons.push(`spread ${spread.toFixed(2)} too wide`);
         if (Math.min(o.askSize, 1e9) < s.minSize) reasons.push(`ask size ${o.askSize} < ${s.minSize}`);
         if (age > s.maxQuoteAgeMs) reasons.push(`quote age ${Math.round(age / 1000)}s`);
@@ -379,10 +385,11 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
         const dn = ladder.find((x) => x.strike === st.strike - s.strikeStep)?.put;
         if (dn) qs.push(dn);
       }
+      const trust = s.patternTrust?.[st.pattern] ?? 1;
       for (const q of qs) {
         if (q.feasibility.hold !== "ok") continue;
         const mode: Cand["mode"] = q.feasibility.resale === "ok" ? "resale" : "hold-to-settlement";
-        if (q.edgeWithDrift >= s.minEdgePts) cands.push({ strike: st, q, mode });
+        if (q.edgeWithDrift >= s.minEdgePts / trust) cands.push({ strike: st, q, mode });
       }
     }
     cands.sort((a, b) => b.q.edgeWithDrift / b.q.ask - a.q.edgeWithDrift / a.q.ask);
@@ -421,7 +428,7 @@ export function assessClosingWindow(i: ClosingInputs): ClosingAssessment {
     } else {
       rec.state = "WAIT";
       rec.rationale = [
-        ladder.some((x) => x.bias) ? "Directional patterns present but no quote clears the edge/feasibility bar." : "No strike shows a break-hold, reclaim, failed cross or acceleration pattern.",
+        ladder.some((x) => x.bias) ? `Directional patterns present but no quote clears the edge/feasibility bar (budget $${s.maxPremiumUsd}/contract).` : "No strike shows a break-hold, reclaim, failed cross or acceleration pattern.",
         `Remaining 1σ ≈ ${sigmaUsedPts.toFixed(1)} pts; nearest strikes ${ladder.filter((x) => Math.abs(x.distance) <= s.strikeStep).map((x) => x.strike).join(", ")}.`,
       ];
     }

@@ -25,3 +25,6 @@ export * from "./features/calendar";
 export * from "./features/sr";
 export * from "./lean/ensemble";
 export * from "./decisions/summary";
+export * from "./features/tick";
+export * from "./decisions/grading";
+export * from "./closing/learning";

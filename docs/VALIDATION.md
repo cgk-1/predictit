@@ -28,6 +28,15 @@ a prospective paper ledger; results accrue from here. The first replay (one part
   the clamps, while the wall-proximity indicator scored best. One day proves nothing except that scoring, bounded
   updates, abstention and interval reporting work end-to-end on real data.
 
+## Continuous self-grading (live, prospective)
+
+- Intraday recommendations: graded at the horizon (direction hit, invalidation-first, would-have return at ask/bid
+  with costs; max favourable excursion when chain snapshots exist). Per-family hit rate with Wilson intervals.
+- Closing window: graded at settlement (provisional on the last print, official on the next session's prev-close);
+  per-pattern and per-sub-window statistics; bounded parameter learning (σ seasonality [1,3], drift persistence [0,1],
+  settlement noise [0.5,5] pts, pattern trust [0.5,1.5]) after 10 graded sessions / 20 outcomes per pattern.
+- Ensemble: 15/60-minute direction predictions scored with Brier and hit rate; learned weights after a 300-decision burn-in.
+
 ## Planned tests (from docs/research/ensemble_and_seasonality.md)
 
 - Level strength: Osler-style protocol — conditional bounce rate at our S/R levels vs 10,000 random levels, by level

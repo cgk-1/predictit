@@ -10,6 +10,7 @@ import { assessRegime, type RegimeAssessment } from "../regime/regime";
 import type { PricePoint } from "../features/levels";
 import { calendarFeatures, type CalendarFeatures } from "../features/calendar";
 import { supportResistance, type SRLevel } from "../features/sr";
+import { tickFeatures, type TickFeatures } from "../features/tick";
 import { etDate } from "../time/et";
 
 export interface KeyLevel {
@@ -44,7 +45,7 @@ export const DEFAULT_SETTINGS: EngineSettings = {
   maxSpreadPct: 0.08,
   maxQuoteAgeMs: 15_000,
   minQuoteSize: 1,
-  maxPremiumPerContract: 1500,
+  maxPremiumPerContract: 200,
   dailyLossLimit: 1000,
   closingWindowLastEntryMinutes: 1,
   commissionPerContract: 0.65,
@@ -68,6 +69,7 @@ export interface EngineContext {
   levels: KeyLevel[];
   calendar: CalendarFeatures | null;
   sr: { support: SRLevel[]; resistance: SRLevel[] };
+  tick: TickFeatures;
   staleness: { spxMs: number | null; chainMs: number | null; barsMs: number | null };
   notes: DataQualityNote[];
   positions: PaperPositionLike[];
@@ -104,7 +106,8 @@ export function buildContext(frame: MarketFrame, settings: EngineSettings = DEFA
     chainMs: frame.spxChain ? asOf - frame.spxChain.stamp.observedAt : null,
     barsMs: frame.spxBars ? asOf - frame.spxBars.stamp.observedAt : null,
   };
-  const regime = assessRegime({ clock, spxBars, spyBars, spxChain, gex, events: frame.events ?? [], staleness, mode });
+  const tick = tickFeatures(frame.tickBars?.bars, frame.tick, asOf);
+  const regime = assessRegime({ clock, spxBars, spyBars, spxChain, gex, events: frame.events ?? [], staleness, mode, tick });
   const priorCloseRef = frame.priorDay?.close ?? frame.priorClose ?? frame.spxChain?.prevClose ?? null;
   const calendar = frame.spxBars ? calendarFeatures(frame.spxBars.bars, asOf, priorCloseRef) : null;
   const levels = keyLevels(frame, spxBars, spyBars, gex, calendar);
@@ -114,7 +117,7 @@ export function buildContext(frame: MarketFrame, settings: EngineSettings = DEFA
   if (!frame.spxChain) notes.push({ level: "warn", message: "No SPX option chain in this frame." });
   if (!frame.spxBars) notes.push({ level: "warn", message: "No SPX 1-minute bars in this frame." });
   if (calendar && calendar.coverageDays < 2) notes.push({ level: "info", message: "Only today's bars available: prior-day, gap and weekly features are n/a until multi-day history is loaded (Schwab price history)." });
-  return { asOf, today, clock, frame, settings, mode, spxBars, spyBars, spxPath: path, spxChain, gex, regime, levels, calendar, sr, staleness, notes: [...notes, ...regime.notes, ...(spxChain?.notes ?? []), ...(gex?.notes ?? [])], positions };
+  return { asOf, today, clock, frame, settings, mode, spxBars, spyBars, spxPath: path, spxChain, gex, regime, levels, calendar, sr, tick, staleness, notes: [...notes, ...regime.notes, ...(spxChain?.notes ?? []), ...(gex?.notes ?? [])], positions };
 }
 
 export function keyLevels(frame: MarketFrame, spx: BarFeatures | null, spy: BarFeatures | null, gex: GexSummary | null, cal: CalendarFeatures | null = null): KeyLevel[] {

@@ -27,7 +27,9 @@ mids and labelled as inferred.
    (features, GEX, regime, calendar, levels, S/R) → score due ensemble predictions and update weights (bounded) →
    `decide` (strategies, ranking, closing window, lean, summary) → append `DecisionRecord` to the insert-only ledger
    when material → diff → change feed.
-4. `/api/state` returns the latest evaluation with server time; clients poll every 3 s.
+4. Every 60 s a grading sweep scores past recommendations (horizon grades), closing-window records (settlement grades,
+   provisional then official) and folds them into the bounded learners (closing parameters, family trust, ensemble weights).
+5. `/api/state` returns the latest evaluation with server time; clients poll every 3 s.
 
 ## Decision model
 

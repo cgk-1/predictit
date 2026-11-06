@@ -32,6 +32,9 @@ replay harness or the prospective paper ledger produces the evidence. Sources wi
 - Intraday momentum (first hours → last hour; Gao et al.) — small, decaying effect; `intradayMom` indicator.
 - Pinning for cash-settled index options is weak/absent in the literature; the closing module treats repeated
   crossings as "pinning: no directional edge".
+- NYSE TICK as participation: persistently signed 10-minute TICK marks broad participation (continuation); readings
+  beyond ±1000 mark exhaustion; price moving without TICK support reverts. Practitioner folklore ([C]); three ensemble
+  indicators, the regime's participation label and the momentum-participation family use it; weights adapt prospectively.
 - Daily calendar effects from our own in-sample study (research/results/daily_calendar_study.md): Monday positive
   2023–2026 (n=181), mild next-day reversion after ±1% days, stronger weeks after down weeks — low prior weights.
 
@@ -41,6 +44,16 @@ trend-pullback, orb, range-rejection, compression-expansion, level-reclaim-rejec
 afternoon-continuation-reversal, eod-auction, strike-flip (closing window), and the market-lean ensemble.
 Each has precise definitions in `packages/engine/src/strategies/families.ts` and `closing/strikeFlip.ts`, replays
 without hindsight, and reports results in `research/results/`. None may be called profitable.
+
+## 3b. Continuous self-grading (how "unvalidated" turns into evidence)
+
+- Every CALL/PUT SETUP is graded at its horizon (underlying move, invalidation-first exit, the recommended contract's
+  would-have return at the ask/bid with costs); summaries by family with Wilson intervals are shown on Performance.
+- Every closing-window record is graded at settlement, provisionally against the last SPX print and then against the
+  official close (the next session's `prev_day_close`); per-pattern hit rates, per-sub-window P&L, σ calibration
+  (RMS z), drift persistence and the official-close-vs-last-tick gap feed bounded parameter updates
+  (`packages/engine/src/closing/learning.ts`).
+- The ensemble scores its own directional predictions at 15 and 60 minutes and adapts weights within clamps.
 
 ## 4. Out-of-sample findings
 

@@ -8,8 +8,8 @@ import type { DataQualityNote, DecisionState, Evidence } from "../types";
 import type { EngineContext } from "./context";
 import { evaluateStrategies, lifecycleRank } from "../strategies/families";
 import type { SetupCandidate, WaitReason } from "../strategies/types";
-import { rankContracts, type RankedContract, type RankingResult } from "../ranking/contracts";
-import { assessClosingWindow, type ClosingAssessment } from "../closing/strikeFlip";
+import { rankAcrossChains, type RankedContract, type RankingResult } from "../ranking/contracts";
+import { assessClosingWindow, type ClosingAssessment, type ClosingSettings } from "../closing/strikeFlip";
 import { markPosition, type PaperPosition, type PositionMark } from "../positions/positions";
 import { fmtEtTime } from "../time/et";
 import { computeLean, initialWeights, type EnsembleWeights, type LeanResult } from "../lean/ensemble";
@@ -53,6 +53,8 @@ export interface DecideInputs {
   previous: DecisionRecord | null;
   realizedToday: number;
   weights?: EnsembleWeights;
+  /** closing-window settings (with learned parameters applied by the caller) */
+  closingSettings?: Partial<ClosingSettings>;
 }
 
 function digest(parts: Array<string | number | null | undefined>): string {
@@ -88,6 +90,7 @@ export function decide(i: DecideInputs): DecisionRecord {
       esPath: [],
       chain: ctx.frame.spxChain ?? null,
       mode: ctx.mode,
+      settings: { maxPremiumUsd: ctx.settings.maxPremiumPerContract, costs: { commissionPerContract: ctx.settings.commissionPerContract, feesPerContract: ctx.settings.feesPerContract }, ...(i.closingSettings ?? {}) },
     });
   }
 
@@ -139,8 +142,9 @@ export function decide(i: DecideInputs): DecisionRecord {
   } else if (!openPositions.length) {
     // rank contracts whenever a triggered setup and a chain exist — also under PASS, for study (never executable)
     if (primary && primary.lifecycle === "triggered" && ctx.frame.spxChain) {
-      const rk: RankingResult = rankContracts({
-        chain: ctx.frame.spxChain,
+      const chains: Array<{ chain: typeof ctx.frame.spxChain; levelScale: number }> = [{ chain: ctx.frame.spxChain, levelScale: 1 }];
+      if (ctx.frame.spyChain && ctx.frame.spx && ctx.frame.spy && ctx.frame.spx.last > 0) chains.push({ chain: ctx.frame.spyChain, levelScale: ctx.frame.spy.last / ctx.frame.spx.last });
+      const rk: RankingResult = rankAcrossChains({
         asOf,
         today: ctx.today,
         direction: primary.direction,
@@ -151,7 +155,7 @@ export function decide(i: DecideInputs): DecisionRecord {
         minutesToClose: ctx.clock.minutesToClose,
         limits: { maxSpreadPct: ctx.settings.maxSpreadPct, maxQuoteAgeMs: ctx.settings.maxQuoteAgeMs, minQuoteSize: ctx.settings.minQuoteSize, maxPremiumPerContract: ctx.settings.maxPremiumPerContract },
         costs: { commissionPerContract: ctx.settings.commissionPerContract, feesPerContract: ctx.settings.feesPerContract },
-      });
+      }, chains);
       contracts = rk.ranked;
       rankingNotes = rk.notes.map((n) => n.message);
       rankingAssumptions = rk.assumptions;
